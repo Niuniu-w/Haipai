@@ -11,6 +11,7 @@ const selectedChapter = ref(0)
 
 const wordCount = computed(() => props.project.rawText.replace(/\s/g, '').length)
 const valid = computed(() => props.project.chapters.length >= 3)
+const supportedExtensions = ['txt', 'md', 'docx']
 
 function detect() {
   props.project.chapters = parseChapters(props.project.rawText)
@@ -18,16 +19,37 @@ function detect() {
   emit('notify', `已识别 ${props.project.chapters.length} 个章节`)
 }
 
-function handleFile(file?: File) {
+async function readFileText(file: File, extension: string) {
+  if (extension !== 'docx') return file.text()
+
+  const mammoth = (await import('mammoth')).default
+  return (await mammoth.extractRawText({ arrayBuffer: await file.arrayBuffer() })).value
+}
+
+async function handleFile(file?: File) {
   if (!file) return
-  const reader = new FileReader()
-  reader.onload = () => {
-    props.project.rawText = String(reader.result ?? '')
-    props.project.filename = file.name
-    if (props.project.title === '未命名故事') props.project.title = file.name.replace(/\.(txt|md)$/i, '')
-    detect()
+
+  const extension = file.name.split('.').pop()?.toLowerCase() ?? ''
+  if (!supportedExtensions.includes(extension)) {
+    emit('notify', '暂不支持该文件格式，请上传 .txt、.md 或 .docx 文件')
+    return
   }
-  reader.readAsText(file)
+
+  try {
+    const text = await readFileText(file, extension)
+
+    if (!text.trim()) {
+      emit('notify', '文件中没有可识别的文本内容')
+      return
+    }
+
+    props.project.rawText = text
+    props.project.filename = file.name
+    if (props.project.title === '未命名故事') props.project.title = file.name.replace(/\.(txt|md|docx)$/i, '')
+    detect()
+  } catch {
+    emit('notify', '文件解析失败，请确认文件未损坏且格式正确')
+  }
 }
 </script>
 
@@ -51,7 +73,12 @@ function handleFile(file?: File) {
           <div><FileText :size="17" /><b>小说原文</b><span v-if="project.filename" class="file-pill">{{ project.filename }}</span></div>
           <label class="text-button">
             <UploadCloud :size="15" /> 上传文件
-            <input type="file" accept=".txt,.md,text/plain,text/markdown" hidden @change="handleFile(($event.target as HTMLInputElement).files?.[0])" />
+            <input
+              type="file"
+              accept=".txt,.md,.docx,text/plain,text/markdown,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+              hidden
+              @change="handleFile(($event.target as HTMLInputElement).files?.[0])"
+            />
           </label>
         </div>
         <input v-model="project.title" class="title-input" placeholder="输入作品标题" />
@@ -63,7 +90,7 @@ function handleFile(file?: File) {
           @drop.prevent="isDragging = false; handleFile($event.dataTransfer?.files[0])"
         >
           <textarea v-model="project.rawText" placeholder="在这里粘贴至少包含三个章节的小说原文…" @blur="detect"></textarea>
-          <span class="drop-hint">支持 .txt / .md，拖拽文件到此处也可以</span>
+          <span class="drop-hint">支持 .txt / .md / .docx，拖拽文件到此处也可以</span>
         </div>
         <button class="button soft full" @click="detect"><BookOpen :size="16" /> 重新识别章节</button>
       </div>
