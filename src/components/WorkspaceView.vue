@@ -24,7 +24,7 @@ import type { Project, Scene } from '../types'
 import { downloadText, projectToYaml } from '../utils'
 
 const props = defineProps<{ project: Project }>()
-const emit = defineEmits<{ back: []; notify: [message: string] }>()
+const emit = defineEmits<{ back: []; notify: [message: string]; save: [] }>()
 const activeId = ref(props.project.scenes[0]?.id ?? '')
 const rightTab = ref<'yaml' | 'source'>('yaml')
 const polishOpen = ref(false)
@@ -114,7 +114,7 @@ function moveScene(direction: number) {
         <span class="draft-pill">DRAFT 01</span>
       </div>
       <div class="toolbar-actions">
-        <button class="button ghost small" @click="emit('notify', '项目已保存到浏览器')"><Save :size="15" /> 保存</button>
+        <button class="button ghost small" @click="emit('save')"><Save :size="15" /> 保存</button>
         <button class="button ghost small" @click="copyYaml"><Clipboard :size="15" /> 复制 YAML</button>
         <button class="button primary small" @click="downloadYaml"><Download :size="15" /> 导出剧本</button>
       </div>

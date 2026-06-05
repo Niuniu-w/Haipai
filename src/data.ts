@@ -130,4 +130,12 @@ export const defaultProject: Project = {
   relationships: demoRelationships,
   scenes: demoScenes,
   updatedAt: '刚刚',
+  analysisStatus: 'completed',
+  analysisMode: 'demo',
+  analysisError: '',
+  analysisAttempts: 0,
+  generationStatus: 'completed',
+  generationMode: 'demo',
+  generationError: '',
+  generationAttempts: 0,
 }
