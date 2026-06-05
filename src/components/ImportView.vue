@@ -1,29 +1,100 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { ArrowRight, BookOpen, CheckCircle2, FileText, Pencil, UploadCloud } from 'lucide-vue-next'
+import { ArrowRight, BookOpen, CheckCircle2, FileText, LoaderCircle, Pencil, UploadCloud } from 'lucide-vue-next'
+import { parseProjectChapters } from '../api/projects'
 import type { Project } from '../types'
 import { parseChapters } from '../utils'
 
-const props = defineProps<{ project: Project }>()
+const props = defineProps<{ project: Project; projectId: string; backendConnected: boolean }>()
 const emit = defineEmits<{ next: []; notify: [message: string] }>()
 const isDragging = ref(false)
+const isParsing = ref(false)
 const selectedChapter = ref(0)
+const parseSource = ref<'backend' | 'local' | ''>('')
 
 const wordCount = computed(() => props.project.rawText.replace(/\s/g, '').length)
 const valid = computed(() => props.project.chapters.length >= 3)
 const supportedExtensions = ['txt', 'md', 'docx']
+type FileEncoding = 'UTF-8' | 'GB18030' | 'UTF-16LE' | 'UTF-16BE' | 'DOCX'
 
-function detect() {
-  props.project.chapters = parseChapters(props.project.rawText)
-  selectedChapter.value = 0
-  emit('notify', `已识别 ${props.project.chapters.length} 个章节`)
+async function detect() {
+  if (isParsing.value) return
+  isParsing.value = true
+
+  try {
+    if (props.backendConnected && props.projectId) {
+      const result = await parseProjectChapters(props.projectId, props.project.rawText)
+      props.project.chapters = result.chapters
+      parseSource.value = 'backend'
+      emit('notify', `后端已识别 ${result.chapter_count} 个章节${result.valid ? '' : '，至少需要 3 章'}`)
+    } else {
+      props.project.chapters = parseChapters(props.project.rawText)
+      parseSource.value = 'local'
+      emit('notify', `本地已识别 ${props.project.chapters.length} 个章节`)
+    }
+  } catch {
+    props.project.chapters = parseChapters(props.project.rawText)
+    parseSource.value = 'local'
+    emit('notify', `后端解析失败，已使用本地规则识别 ${props.project.chapters.length} 个章节`)
+  } finally {
+    selectedChapter.value = 0
+    isParsing.value = false
+  }
 }
 
-async function readFileText(file: File, extension: string) {
-  if (extension !== 'docx') return file.text()
+function hasPrefix(bytes: Uint8Array, prefix: number[]) {
+  return prefix.every((value, index) => bytes[index] === value)
+}
+
+function detectUtf16(bytes: Uint8Array) {
+  const sample = bytes.slice(0, Math.min(bytes.length, 200))
+  let evenZeroes = 0
+  let oddZeroes = 0
+
+  sample.forEach((value, index) => {
+    if (value !== 0) return
+    if (index % 2 === 0) evenZeroes += 1
+    else oddZeroes += 1
+  })
+
+  if (oddZeroes > sample.length / 5) return 'utf-16le'
+  if (evenZeroes > sample.length / 5) return 'utf-16be'
+  return ''
+}
+
+function decodeText(bytes: Uint8Array, encoding: string) {
+  return new TextDecoder(encoding, { fatal: true }).decode(bytes)
+}
+
+async function readPlainText(file: File): Promise<{ text: string; encoding: FileEncoding }> {
+  const bytes = new Uint8Array(await file.arrayBuffer())
+
+  if (hasPrefix(bytes, [0xff, 0xfe])) return { text: decodeText(bytes, 'utf-16le'), encoding: 'UTF-16LE' }
+  if (hasPrefix(bytes, [0xfe, 0xff])) return { text: decodeText(bytes, 'utf-16be'), encoding: 'UTF-16BE' }
+
+  const utf16Encoding = detectUtf16(bytes)
+  if (utf16Encoding) {
+    return {
+      text: decodeText(bytes, utf16Encoding),
+      encoding: utf16Encoding === 'utf-16le' ? 'UTF-16LE' : 'UTF-16BE',
+    }
+  }
+
+  try {
+    return { text: decodeText(bytes, 'utf-8'), encoding: 'UTF-8' }
+  } catch {
+    return { text: decodeText(bytes, 'gb18030'), encoding: 'GB18030' }
+  }
+}
+
+async function readFileText(file: File, extension: string): Promise<{ text: string; encoding: FileEncoding }> {
+  if (extension !== 'docx') return readPlainText(file)
 
   const mammoth = (await import('mammoth')).default
-  return (await mammoth.extractRawText({ arrayBuffer: await file.arrayBuffer() })).value
+  return {
+    text: (await mammoth.extractRawText({ arrayBuffer: await file.arrayBuffer() })).value,
+    encoding: 'DOCX',
+  }
 }
 
 async function handleFile(file?: File) {
@@ -36,7 +107,7 @@ async function handleFile(file?: File) {
   }
 
   try {
-    const text = await readFileText(file, extension)
+    const { text, encoding } = await readFileText(file, extension)
 
     if (!text.trim()) {
       emit('notify', '文件中没有可识别的文本内容')
@@ -45,10 +116,28 @@ async function handleFile(file?: File) {
 
     props.project.rawText = text
     props.project.filename = file.name
+    props.project.genre = ''
+    props.project.style = ''
+    props.project.era = ''
+    props.project.summary = ''
+    props.project.characters = []
+    props.project.relationships = []
+    props.project.scenes = []
+    props.project.analysisStatus = 'pending'
+    props.project.analysisMode = ''
+    props.project.analysisError = ''
+    props.project.analysisAttempts = 0
+    props.project.generationStatus = 'pending'
+    props.project.generationMode = ''
+    props.project.generationError = ''
+    props.project.generationAttempts = 0
     if (props.project.title === '未命名故事') props.project.title = file.name.replace(/\.(txt|md|docx)$/i, '')
-    detect()
+    await detect()
+    if (encoding !== 'UTF-8' && encoding !== 'DOCX') {
+      emit('notify', `已按 ${encoding} 编码读取，并识别 ${props.project.chapters.length} 个章节`)
+    }
   } catch {
-    emit('notify', '文件解析失败，请确认文件未损坏且格式正确')
+    emit('notify', '文件解析失败，请确认文件未损坏或转换为 UTF-8 后重试')
   }
 }
 </script>
@@ -90,15 +179,21 @@ async function handleFile(file?: File) {
           @drop.prevent="isDragging = false; handleFile($event.dataTransfer?.files[0])"
         >
           <textarea v-model="project.rawText" placeholder="在这里粘贴至少包含三个章节的小说原文…" @blur="detect"></textarea>
-          <span class="drop-hint">支持 .txt / .md / .docx，拖拽文件到此处也可以</span>
+          <span class="drop-hint">支持 .txt / .md / .docx，文本文件自动兼容常见中文编码</span>
         </div>
-        <button class="button soft full" @click="detect"><BookOpen :size="16" /> 重新识别章节</button>
+        <button class="button soft full" :disabled="isParsing" @click="detect">
+          <LoaderCircle v-if="isParsing" class="spin" :size="16" />
+          <BookOpen v-else :size="16" />
+          {{ isParsing ? '正在识别章节…' : '重新识别章节' }}
+        </button>
       </div>
 
       <div class="panel chapter-panel">
         <div class="panel-title">
           <div><BookOpen :size="17" /><b>章节识别结果</b></div>
-          <span class="valid-badge" :class="{ invalid: !valid }"><CheckCircle2 :size="14" />{{ valid ? '结构有效' : '至少需要 3 章' }}</span>
+          <span class="valid-badge" :class="{ invalid: !valid }">
+            <CheckCircle2 :size="14" />{{ valid ? `结构有效${parseSource ? ` · ${parseSource === 'backend' ? '后端' : '本地'}` : ''}` : '至少需要 3 章' }}
+          </span>
         </div>
         <div class="chapter-list">
           <button
@@ -126,7 +221,7 @@ async function handleFile(file?: File) {
     </div>
 
     <div class="flow-footer">
-      <span><CheckCircle2 :size="15" /> 原文仅保存在你的浏览器中</span>
+      <span><CheckCircle2 :size="15" /> {{ backendConnected ? '原文与章节将同步至后端' : '后端未连接，原文暂存于浏览器' }}</span>
       <button class="button primary" :disabled="!valid" @click="$emit('next')">确认章节，开始分析 <ArrowRight :size="16" /></button>
     </div>
   </section>

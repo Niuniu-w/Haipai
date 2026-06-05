@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { ArrowRight, BookOpenText, Clapperboard, FileText, Play, Sparkles, WandSparkles } from 'lucide-vue-next'
+import { ArrowRight, BookOpenText, Clapperboard, FileText, FolderOpen, Play, Sparkles, Trash2, WandSparkles } from 'lucide-vue-next'
+import type { ProjectSummary } from '../api/projects'
 import type { Project } from '../types'
 
-defineProps<{ project: Project }>()
-defineEmits<{ start: []; demo: []; continue: [] }>()
+defineProps<{ project: Project; projects: ProjectSummary[] }>()
+defineEmits<{ start: []; demo: []; continue: []; open: [projectId: string]; remove: [projectId: string] }>()
 </script>
 
 <template>
@@ -57,5 +58,18 @@ defineEmits<{ start: []; demo: []; continue: [] }>()
       <span class="recent-meta">{{ project.chapters.length }} 章 · {{ project.scenes.length }} 场 · {{ project.updatedAt }}</span>
       <ArrowRight :size="17" />
     </button>
+
+    <section v-if="projects.length" class="project-history">
+      <div class="history-head"><span>后端项目</span><small>已保存 {{ projects.length }} 个项目</small></div>
+      <div class="history-list">
+        <article v-for="item in projects.slice(0, 5)" :key="item.id" class="history-item">
+          <button class="history-open" @click="$emit('open', item.id)">
+            <FolderOpen :size="17" />
+            <span><b>《{{ item.title }}》</b><small>{{ item.chapter_count }} 章 · {{ item.scene_count }} 场</small></span>
+          </button>
+          <button class="history-remove" title="删除后端项目" @click="$emit('remove', item.id)"><Trash2 :size="14" /></button>
+        </article>
+      </div>
+    </section>
   </section>
 </template>

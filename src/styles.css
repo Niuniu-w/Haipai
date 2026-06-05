@@ -48,6 +48,8 @@ textarea { resize: none; }
 .top-actions { display: flex; align-items: center; gap: 10px; min-width: 190px; justify-content: flex-end; }
 .avatar { width: 30px; height: 30px; display: grid; place-items: center; background: var(--ink); color: white; border-radius: 50%; font: 500 10px "DM Mono"; }
 .save-state { display: flex; gap: 6px; align-items: center; color: var(--green); font-size: 11px; }
+.backend-state { border:0;background:transparent;display:flex;align-items:center;gap:5px;padding:5px;color:var(--muted);font-size:9px;white-space:nowrap; }
+.backend-state.connected { color:var(--green); }.backend-state.disconnected { color:var(--accent); }.backend-state.checking svg { animation:spin 1.2s linear infinite; }
 .step-nav { display: flex; align-items: center; gap: 5px; }
 .step-item { display: flex; align-items: center; gap: 7px; border: 0; background: transparent; color: var(--muted); padding: 7px 10px; font-size: 11px; border-radius: 20px; }
 .step-item.active { background: var(--ink); color: white; }
@@ -102,6 +104,11 @@ textarea { resize: none; }
 .process-intro { padding-right: 26px; margin-right: 4px; border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: 8px; min-width: 170px; }.process-intro span { color: var(--accent); font: 500 9px "DM Mono"; letter-spacing:.12em; }.process-intro strong { font:700 14px "Noto Serif SC"; }
 .process-item { display: flex; gap: 9px; flex: 1; align-items: center; position:relative; }.process-item i { position:absolute; top:-18px; color:#c7c1b5; font:500 8px "DM Mono"; }.process-item svg { color:var(--accent); }.process-item div { display:flex; flex-direction:column; gap:3px; }.process-item b { font-size:11px; }.process-item span { font-size:9px; color:var(--muted); }.process-arrow { color:#c5bfb3; font:300 18px "DM Mono"; }
 .recent-project { position: relative; z-index: 2; margin: 12px auto 0; border: 0; background: transparent; display:flex; align-items:center; gap:10px; color:var(--muted); font-size:10px; }.recent-project:hover { color:var(--ink); }.recent-project span:nth-child(2) { display:flex; gap:6px; }.recent-project small { font-size:10px; }.recent-project b { color:var(--ink); }.recent-icon { width:24px;height:24px;display:grid!important;place-items:center;background:var(--ink);color:white;border-radius:50%; }.recent-meta { border-left:1px solid var(--line);padding-left:10px; }
+.project-history { position:relative;z-index:2;width:min(720px,calc(100% - 40px));margin:18px auto 30px;padding:14px;background:rgba(255,255,255,.62);border:1px solid var(--line);border-radius:14px;backdrop-filter:blur(10px); }
+.history-head { display:flex;align-items:center;justify-content:space-between;margin-bottom:9px;color:var(--ink);font-size:11px;font-weight:700; }.history-head small { color:var(--muted);font-size:9px;font-weight:500; }
+.history-list { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px; }.history-item { display:flex;align-items:center;gap:4px;border:1px solid var(--line);border-radius:10px;background:rgba(255,255,255,.68);padding:4px; }
+.history-open { min-width:0;flex:1;border:0;background:transparent;display:flex;align-items:center;gap:8px;padding:7px;text-align:left;color:var(--muted); }.history-open span { min-width:0;display:flex;flex-direction:column;gap:2px; }.history-open b { overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink);font-size:10px; }.history-open small { color:var(--muted);font-size:8px; }.history-open:hover svg { color:var(--accent); }
+.history-remove { border:0;background:transparent;color:var(--muted);padding:7px;border-radius:7px; }.history-remove:hover { background:var(--soft-accent);color:var(--accent); }
 
 /* Shared flow */
 .flow-page { max-width: 1400px; margin: 0 auto; padding: 42px 42px 24px; }
@@ -155,6 +162,7 @@ textarea { resize: none; }
 .chapter-progress { padding:11px 13px; }.chapter-progress-head { display:flex;justify-content:space-between;margin-bottom:6px;font-size:8px;color:var(--muted); }.chapter-progress-head b { color:var(--ink);font-family:"DM Mono"; }.generation-row { display:flex;align-items:center;gap:7px;border-top:1px solid var(--line);padding:7px 0;font-size:8px; }.generation-index { color:var(--muted);font:500 7px "DM Mono"; }.generation-row b { flex:1; }.status { display:flex;align-items:center;gap:4px;font-size:7px; }.status.done { color:var(--green); }.status.running { color:var(--accent); }.status.waiting { color:var(--muted); }
 .generate-actions { margin-top:20px;display:flex;justify-content:center;gap:8px; }
 @keyframes spin { to { transform:rotate(360deg); } }
+.spin { animation:spin 1.2s linear infinite; }
 
 /* Workspace */
 .workspace-mode .topbar { display:none; }.workspace { height:100vh;display:flex;flex-direction:column;background:#eeece6; }

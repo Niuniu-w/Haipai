@@ -58,4 +58,12 @@ export interface Project {
   relationships: Relationship[]
   scenes: Scene[]
   updatedAt: string
+  analysisStatus: 'pending' | 'running' | 'completed' | 'failed'
+  analysisMode: string
+  analysisError: string
+  analysisAttempts: number
+  generationStatus: 'pending' | 'running' | 'completed' | 'failed'
+  generationMode: string
+  generationError: string
+  generationAttempts: number
 }
