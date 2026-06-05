@@ -2,3 +2,11 @@ node_modules/
 dist/
 *.tsbuildinfo
 .DS_Store
+.env
+backend/.env
+.venv/
+__pycache__/
+.pytest_cache/
+*.py[cod]
+*.db
+*.db-*
