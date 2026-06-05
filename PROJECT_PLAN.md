@@ -33,7 +33,7 @@
 ### A. 小说导入
 
 - 支持直接粘贴小说文本。
-- 支持上传 `.txt` 和 `.md` 文件。
+- 支持上传 `.txt`、`.md` 和 `.docx` 文件。
 - 显示字数、章节数和文件名。
 - 自动识别常见章节标题，例如：
   - `第一章 雨夜`
@@ -114,7 +114,7 @@
 ## 2.3 暂不纳入首版
 
 - 多人实时协作。
-- PDF、Word、EPUB 等复杂格式解析。
+- PDF、旧版 Word `.doc`、EPUB 等复杂格式解析。
 - 完整影视行业标准剧本排版。
 - 自训练模型或向量数据库。
 - 复杂权限系统和付费系统。
@@ -137,6 +137,7 @@
 | Axios | HTTP 请求 | 封装后端 API 请求 |
 | Monaco Editor | YAML 编辑器 | 提供接近 VS Code 的 YAML 编辑体验 |
 | js-yaml | 前端 YAML 解析 | YAML 预览、解析和基础错误提示 |
+| mammoth | DOCX 正文提取 | 在浏览器端将 `.docx` 转换为可识别的纯文本 |
 
 ## 3.2 后端
 
@@ -149,7 +150,7 @@
 | SQLite | 数据库 | 无需单独部署，适合比赛项目 |
 | OpenAI Python SDK | 调用大模型 | 支持 OpenAI-compatible 模型接口 |
 | PyYAML | YAML 导出 | 将已校验的剧本对象转换为 YAML |
-| python-multipart | 文件上传 | 支持 `.txt`、`.md` 文件上传 |
+| python-multipart | 文件上传 | 支持 `.txt`、`.md`、`.docx` 文件上传 |
 | Uvicorn | 本地服务器 | 运行 FastAPI |
 
 ## 3.3 开发与测试工具
