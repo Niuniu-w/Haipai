@@ -596,17 +596,3 @@ scenes:
 | YAML 被用户编辑坏 | 显示语法错误，保存和导出前再次校验 |
 
 ---
-
-## 13. 当前环境检查结果
-
-检查日期：2026-06-05
-
-- 工作区 `/Users/wangningning/Documents/Haipai` 当前为空。
-- 系统架构为 Apple Silicon `arm64`。
-- 已安装 Visual Studio Code，但 `code` 命令尚未加入 PATH。
-- `node` 和 `npm` 尚未安装或未加入 PATH。
-- 未发现 Homebrew。
-- `python3` 和 `git` 当前因缺少 Xcode Command Line Tools 无法正常执行。
-- 系统提供 `sqlite3` 和 `curl`。
-
-下一步应先完成阶段 0 的环境准备，再初始化前后端项目。
