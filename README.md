@@ -63,7 +63,7 @@ backend/.venv/bin/uvicorn app.main:app --reload --app-dir backend
 
 访问 `http://127.0.0.1:8000/api/health` 检查后端状态，访问 `http://127.0.0.1:8000/docs` 查看 API 文档。数据库默认保存在 `backend/storyforge.db`，该运行数据不会提交到仓库。详细说明见 [`backend/README.md`](./backend/README.md)。
 
-前端默认连接 `http://127.0.0.1:8000`。部署或更换后端地址时，在前端运行环境中设置 `VITE_API_BASE_URL`。
+前端默认连接 `http://127.0.0.1:8000`。部署或更换后端地址时，复制 [`.env.example`](./.env.example) 为 `.env`，并设置 `VITE_API_BASE_URL`。
 
 真实大模型为可选配置。参考 [`backend/.env.example`](./backend/.env.example) 设置后端密钥；密钥只由后端读取，未配置时项目仍使用本地规则完成故事分析。
 
