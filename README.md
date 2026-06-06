@@ -88,6 +88,22 @@ backend/.venv/bin/uvicorn app.main:app --reload --app-dir backend
 - `lucide-vue-next`：界面图标
 - Browser LocalStorage：后端不可用时的本地保存兜底
 
+## 目录结构
+
+```text
+Haipai/
+├── src/                 Vue 前端源码
+│   ├── api/             后端 API 客户端
+│   └── components/      流程页面与编辑工作台
+├── backend/
+│   ├── app/             FastAPI、业务服务与数据模型
+│   └── tests/           后端自动测试
+├── docs/                项目规划与开发文档
+└── package.json         前端依赖与运行命令
+```
+
+详细文档索引见 [`docs/README.md`](./docs/README.md)。
+
 ## 原创说明
 
 本项目的产品流程、界面设计、示例小说、章节解析逻辑、模拟分析数据、剧本工作台交互和 YAML 数据转换均针对本项目独立实现。第三方框架和依赖仅用于基础工程能力、图标、DOCX 正文提取和 YAML 序列化。
