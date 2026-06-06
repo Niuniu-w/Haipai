@@ -4,8 +4,10 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
+import backend.app.projects as projects
 from backend.app.database import Base, get_db
 from backend.app.main import app
+from backend.app.script_generator import build_local_scenes
 
 
 @pytest.fixture
@@ -44,6 +46,7 @@ def project_data() -> dict:
         "generationMode": "",
         "generationError": "",
         "generationAttempts": 0,
+        "generationChapters": [],
     }
 
 
@@ -218,3 +221,151 @@ async def test_generate_project_requires_three_chapters(client: AsyncClient, pro
     response = await client.post(f"/api/projects/{project_id}/generate")
 
     assert response.status_code == 409
+
+
+@pytest.mark.anyio
+async def test_generation_runs_and_persists_one_chapter_at_a_time(
+    client: AsyncClient,
+    project_data: dict,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    raw_text = """第一章 开始
+林墨走进咖啡馆。
+
+第二章 继续
+苏禾在档案室找到线索。
+
+第三章 结尾
+陈望在桥下说出真相。"""
+    project_id = (await client.post("/api/projects", json=project_data)).json()["id"]
+    await client.post(f"/api/projects/{project_id}/parse-chapters", json={"raw_text": raw_text})
+    await client.post(f"/api/projects/{project_id}/analyze")
+    generated_chapter_ids: list[list[str]] = []
+
+    def record_generation(*args, **kwargs):
+        chapters = kwargs["chapters"]
+        generated_chapter_ids.append([chapter.id for chapter in chapters])
+        return (
+            build_local_scenes(chapters, kwargs["characters"], kwargs["genre"], kwargs["style"]),
+            "local-rules",
+            "",
+        )
+
+    monkeypatch.setattr(projects, "generate_script_with_fallback", record_generation)
+
+    start_response = await client.post(f"/api/projects/{project_id}/generation/start")
+    assert start_response.status_code == 200
+    assert [item["status"] for item in start_response.json()["chapter_statuses"]] == ["pending"] * 3
+
+    first_response = await client.post(f"/api/projects/{project_id}/chapters/chapter-1/generate")
+    assert first_response.status_code == 200
+    assert first_response.json()["generation_status"] == "running"
+    assert first_response.json()["scene_count"] == 1
+    assert [item["status"] for item in first_response.json()["chapter_statuses"]] == [
+        "completed",
+        "pending",
+        "pending",
+    ]
+
+    saved_project = (await client.get(f"/api/projects/{project_id}")).json()["data"]
+    assert len(saved_project["scenes"]) == 1
+    assert saved_project["generationChapters"][0]["status"] == "completed"
+
+    await client.post(f"/api/projects/{project_id}/chapters/chapter-2/generate")
+    final_response = await client.post(f"/api/projects/{project_id}/chapters/chapter-3/generate")
+    assert final_response.json()["generation_status"] == "completed"
+    assert final_response.json()["scene_count"] == 3
+    assert generated_chapter_ids == [["chapter-1"], ["chapter-2"], ["chapter-3"]]
+
+
+@pytest.mark.anyio
+async def test_compatibility_generate_endpoint_never_sends_multiple_chapters_to_model(
+    client: AsyncClient,
+    project_data: dict,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    raw_text = """第一章 开始
+林墨走进咖啡馆。
+
+第二章 继续
+苏禾在档案室找到线索。
+
+第三章 结尾
+陈望在桥下说出真相。"""
+    project_id = (await client.post("/api/projects", json=project_data)).json()["id"]
+    await client.post(f"/api/projects/{project_id}/parse-chapters", json={"raw_text": raw_text})
+    await client.post(f"/api/projects/{project_id}/analyze")
+    generated_chapter_ids: list[list[str]] = []
+
+    def record_generation(*args, **kwargs):
+        chapters = kwargs["chapters"]
+        generated_chapter_ids.append([chapter.id for chapter in chapters])
+        return (
+            build_local_scenes(chapters, kwargs["characters"], kwargs["genre"], kwargs["style"]),
+            "local-rules",
+            "",
+        )
+
+    monkeypatch.setattr(projects, "generate_script_with_fallback", record_generation)
+
+    response = await client.post(f"/api/projects/{project_id}/generate")
+
+    assert response.status_code == 200
+    assert response.json()["generation_status"] == "completed"
+    assert generated_chapter_ids == [["chapter-1"], ["chapter-2"], ["chapter-3"]]
+
+
+@pytest.mark.anyio
+async def test_failed_chapter_can_retry_without_regenerating_other_chapters(
+    client: AsyncClient,
+    project_data: dict,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    raw_text = """第一章 开始
+林墨走进咖啡馆。
+
+第二章 继续
+苏禾在档案室找到线索。
+
+第三章 结尾
+陈望在桥下说出真相。"""
+    project_id = (await client.post("/api/projects", json=project_data)).json()["id"]
+    await client.post(f"/api/projects/{project_id}/parse-chapters", json={"raw_text": raw_text})
+    await client.post(f"/api/projects/{project_id}/analyze")
+    await client.post(f"/api/projects/{project_id}/generation/start")
+    calls: list[str] = []
+
+    def fail_second_chapter_once(*args, **kwargs):
+        chapter = kwargs["chapters"][0]
+        calls.append(chapter.id)
+        if chapter.id == "chapter-2" and calls.count("chapter-2") == 1:
+            raise RuntimeError("模拟单章失败")
+        return (
+            build_local_scenes(kwargs["chapters"], kwargs["characters"], kwargs["genre"], kwargs["style"]),
+            "local-rules",
+            "",
+        )
+
+    monkeypatch.setattr(projects, "generate_script_with_fallback", fail_second_chapter_once)
+
+    await client.post(f"/api/projects/{project_id}/chapters/chapter-1/generate")
+    first_chapter_scenes = [
+        scene
+        for scene in (await client.get(f"/api/projects/{project_id}")).json()["data"]["scenes"]
+        if scene["chapterId"] == "chapter-1"
+    ]
+
+    failed_response = await client.post(f"/api/projects/{project_id}/chapters/chapter-2/generate")
+    assert failed_response.status_code == 500
+    status_response = await client.get(f"/api/projects/{project_id}/generation-status")
+    assert status_response.json()["status"] == "failed"
+    assert status_response.json()["chapter_statuses"][1]["status"] == "failed"
+
+    retry_response = await client.post(f"/api/projects/{project_id}/chapters/chapter-2/generate")
+    assert retry_response.status_code == 200
+    assert retry_response.json()["chapter_statuses"][1]["status"] == "completed"
+    assert retry_response.json()["chapter_statuses"][1]["attempts"] == 2
+    assert calls == ["chapter-1", "chapter-2", "chapter-2"]
+    assert [
+        scene for scene in retry_response.json()["scenes"] if scene["chapterId"] == "chapter-1"
+    ] == first_chapter_scenes

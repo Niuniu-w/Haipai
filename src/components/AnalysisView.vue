@@ -47,6 +47,7 @@ async function runAnalysis() {
     props.project.generationMode = ''
     props.project.generationError = ''
     props.project.generationAttempts = 0
+    props.project.generationChapters = []
     emit(
       'notify',
       result.analysis_mode === 'local-rules-fallback'

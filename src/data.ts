@@ -138,4 +138,10 @@ export const defaultProject: Project = {
   generationMode: 'demo',
   generationError: '',
   generationAttempts: 0,
+  generationChapters: [
+    { chapter_id: 'chapter-1', status: 'completed', mode: 'demo', attempts: 0, error: '', scene_count: 1 },
+    { chapter_id: 'chapter-2', status: 'completed', mode: 'demo', attempts: 0, error: '', scene_count: 1 },
+    { chapter_id: 'chapter-3', status: 'completed', mode: 'demo', attempts: 0, error: '', scene_count: 1 },
+    { chapter_id: 'chapter-4', status: 'completed', mode: 'demo', attempts: 0, error: '', scene_count: 1 },
+  ],
 }

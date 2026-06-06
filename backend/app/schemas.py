@@ -48,6 +48,15 @@ class Scene(BaseModel):
     sourceSummary: str
 
 
+class GenerationChapterState(BaseModel):
+    chapter_id: str
+    status: str = "pending"
+    mode: str = ""
+    attempts: int = 0
+    error: str = ""
+    scene_count: int = 0
+
+
 class ProjectData(BaseModel):
     title: str = Field(min_length=1, max_length=200)
     filename: str
@@ -71,6 +80,7 @@ class ProjectData(BaseModel):
     generationMode: str = ""
     generationError: str = ""
     generationAttempts: int = 0
+    generationChapters: list[GenerationChapterState] = Field(default_factory=list)
 
 
 class ProjectResponse(BaseModel):
@@ -129,6 +139,7 @@ class ScriptGenerationResponse(BaseModel):
     generation_mode: str
     generation_attempts: int
     generation_error: str
+    chapter_statuses: list[GenerationChapterState]
 
 
 class GenerationStatusResponse(BaseModel):
@@ -137,3 +148,4 @@ class GenerationStatusResponse(BaseModel):
     attempts: int
     error: str
     scene_count: int
+    chapter_statuses: list[GenerationChapterState]

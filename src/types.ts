@@ -43,6 +43,15 @@ export interface Scene {
   sourceSummary: string
 }
 
+export interface GenerationChapterState {
+  chapter_id: string
+  status: 'pending' | 'running' | 'completed' | 'failed'
+  mode: string
+  attempts: number
+  error: string
+  scene_count: number
+}
+
 export interface Project {
   title: string
   filename: string
@@ -66,4 +75,5 @@ export interface Project {
   generationMode: string
   generationError: string
   generationAttempts: number
+  generationChapters: GenerationChapterState[]
 }

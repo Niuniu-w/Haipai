@@ -131,6 +131,7 @@ async function handleFile(file?: File) {
     props.project.generationMode = ''
     props.project.generationError = ''
     props.project.generationAttempts = 0
+    props.project.generationChapters = []
     if (props.project.title === '未命名故事') props.project.title = file.name.replace(/\.(txt|md|docx)$/i, '')
     await detect()
     if (encoding !== 'UTF-8' && encoding !== 'DOCX') {
