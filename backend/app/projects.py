@@ -12,10 +12,13 @@ from .schemas import (
     ChapterParseRequest,
     ChapterParseResponse,
     Character,
+    Dialogue,
+    GenerationChapterState,
     GenerationStatusResponse,
     ProjectData,
     ProjectResponse,
     ProjectSummary,
+    Scene,
     ScriptGenerationResponse,
     StoryAnalysisResponse,
 )
@@ -32,6 +35,212 @@ def get_project_or_404(project_id: str, db: Session) -> ProjectRecord:
 
 def project_response(project: ProjectRecord) -> ProjectResponse:
     return ProjectResponse.model_validate(project)
+
+
+def reset_generation(payload: dict) -> None:
+    payload.update(
+        {
+            "scenes": [],
+            "generationStatus": "pending",
+            "generationMode": "",
+            "generationError": "",
+            "generationAttempts": 0,
+            "generationChapters": [],
+        }
+    )
+
+
+def get_chapter_states(payload: dict, chapters: list[Chapter]) -> list[GenerationChapterState]:
+    stored = {
+        state.chapter_id: state
+        for state in (
+            GenerationChapterState.model_validate(item)
+            for item in payload.get("generationChapters", [])
+        )
+    }
+    scenes = [Scene.model_validate(scene) for scene in payload.get("scenes", [])]
+    project_completed = payload.get("generationStatus") == "completed"
+    states = []
+    for chapter in chapters:
+        if chapter.id in stored:
+            states.append(stored[chapter.id])
+            continue
+        scene_count = sum(scene.chapterId == chapter.id for scene in scenes)
+        states.append(
+            GenerationChapterState(
+                chapter_id=chapter.id,
+                status="completed" if project_completed and scene_count else "pending",
+                mode=payload.get("generationMode", "") if scene_count else "",
+                scene_count=scene_count,
+            )
+        )
+    return states
+
+
+def reindex_scenes(scenes: list[Scene], chapters: list[Chapter]) -> list[Scene]:
+    chapter_order = {chapter.id: index for index, chapter in enumerate(chapters)}
+    ordered = sorted(enumerate(scenes), key=lambda item: (chapter_order.get(item[1].chapterId, len(chapters)), item[0]))
+    return [
+        scene.model_copy(
+            update={
+                "id": f"SC-{scene_index + 1:02d}",
+                "dialogues": [
+                    Dialogue(
+                        id=f"dialogue-{scene_index + 1}-{dialogue_index + 1}",
+                        character=dialogue.character,
+                        emotion=dialogue.emotion,
+                        line=dialogue.line,
+                    )
+                    for dialogue_index, dialogue in enumerate(scene.dialogues)
+                ],
+            }
+        )
+        for scene_index, (_, scene) in enumerate(ordered)
+    ]
+
+
+def aggregate_generation(states: list[GenerationChapterState]) -> tuple[str, str, str]:
+    if any(state.status == "failed" for state in states):
+        generation_status = "failed"
+    elif states and all(state.status == "completed" for state in states):
+        generation_status = "completed"
+    elif any(state.status in {"running", "completed"} for state in states):
+        generation_status = "running"
+    else:
+        generation_status = "pending"
+
+    modes = {state.mode for state in states if state.mode}
+    if "local-rules-fallback" in modes:
+        generation_mode = "local-rules-fallback"
+    elif len(modes) == 1:
+        generation_mode = modes.pop()
+    elif modes:
+        generation_mode = "mixed"
+    else:
+        generation_mode = ""
+    generation_error = next((state.error for state in states if state.status == "failed" and state.error), "")
+    if not generation_error:
+        generation_error = next((state.error for state in states if state.error), "")
+    return generation_status, generation_mode, generation_error
+
+
+def save_generation_state(
+    project: ProjectRecord,
+    db: Session,
+    payload: dict,
+    states: list[GenerationChapterState],
+) -> None:
+    generation_status, generation_mode, generation_error = aggregate_generation(states)
+    payload.update(
+        {
+            "generationChapters": [state.model_dump(mode="json") for state in states],
+            "generationStatus": generation_status,
+            "generationMode": generation_mode,
+            "generationError": generation_error,
+        }
+    )
+    project.data = dict(payload)
+    db.commit()
+    db.refresh(project)
+
+
+def generation_status_response(project: ProjectRecord) -> GenerationStatusResponse:
+    payload = dict(project.data)
+    chapters = [Chapter.model_validate(chapter) for chapter in payload.get("chapters", [])]
+    states = get_chapter_states(payload, chapters)
+    return GenerationStatusResponse(
+        status=payload.get("generationStatus", "pending"),
+        mode=payload.get("generationMode", ""),
+        attempts=int(payload.get("generationAttempts", 0)),
+        error=payload.get("generationError", ""),
+        scene_count=len(payload.get("scenes", [])),
+        chapter_statuses=states,
+    )
+
+
+def script_generation_response(project: ProjectRecord) -> ScriptGenerationResponse:
+    payload = dict(project.data)
+    chapters = [Chapter.model_validate(chapter) for chapter in payload.get("chapters", [])]
+    scenes = [Scene.model_validate(scene) for scene in payload.get("scenes", [])]
+    return ScriptGenerationResponse(
+        scenes=scenes,
+        scene_count=len(scenes),
+        generation_status=payload.get("generationStatus", "pending"),
+        generation_mode=payload.get("generationMode", ""),
+        generation_attempts=int(payload.get("generationAttempts", 0)),
+        generation_error=payload.get("generationError", ""),
+        chapter_statuses=get_chapter_states(payload, chapters),
+    )
+
+
+def initialize_generation(project: ProjectRecord, db: Session) -> GenerationStatusResponse:
+    payload = dict(project.data)
+    chapters = [Chapter.model_validate(chapter) for chapter in payload.get("chapters", [])]
+    if len(chapters) < 3:
+        raise HTTPException(status_code=409, detail="至少需要 3 个章节才能生成剧本")
+    states = [GenerationChapterState(chapter_id=chapter.id) for chapter in chapters]
+    payload.update(
+        {
+            "scenes": [],
+            "generationStatus": "pending",
+            "generationMode": "",
+            "generationError": "",
+            "generationAttempts": int(payload.get("generationAttempts", 0)) + 1,
+            "generationChapters": [state.model_dump(mode="json") for state in states],
+        }
+    )
+    project.data = dict(payload)
+    db.commit()
+    db.refresh(project)
+    return generation_status_response(project)
+
+
+def generate_chapter(project: ProjectRecord, chapter_id: str, db: Session) -> ScriptGenerationResponse:
+    payload = dict(project.data)
+    chapters = [Chapter.model_validate(chapter) for chapter in payload.get("chapters", [])]
+    characters = [Character.model_validate(character) for character in payload.get("characters", [])]
+    chapter = next((item for item in chapters if item.id == chapter_id), None)
+    if chapter is None:
+        raise HTTPException(status_code=404, detail="章节不存在")
+
+    states = get_chapter_states(payload, chapters)
+    chapter_state = next(state for state in states if state.chapter_id == chapter_id)
+    chapter_state.status = "running"
+    chapter_state.attempts += 1
+    chapter_state.error = ""
+    payload["generationAttempts"] = max(1, int(payload.get("generationAttempts", 0)))
+    save_generation_state(project, db, payload, states)
+
+    try:
+        generated_scenes, generation_mode, generation_error = generate_script_with_fallback(
+            title=project.title,
+            summary=payload.get("summary", ""),
+            genre=payload.get("genre", ""),
+            style=payload.get("style", ""),
+            adaptation_mode=payload.get("adaptationMode", "忠于原著"),
+            script_type=payload.get("scriptType", "电影"),
+            chapters=[chapter],
+            characters=characters,
+        )
+        existing_scenes = [
+            Scene.model_validate(scene)
+            for scene in payload.get("scenes", [])
+            if scene.get("chapterId") != chapter_id
+        ]
+        scenes = reindex_scenes(existing_scenes + generated_scenes, chapters)
+        chapter_state.status = "completed"
+        chapter_state.mode = generation_mode
+        chapter_state.error = generation_error
+        chapter_state.scene_count = sum(scene.chapterId == chapter_id for scene in scenes)
+        payload["scenes"] = [scene.model_dump(mode="json") for scene in scenes]
+        save_generation_state(project, db, payload, states)
+        return script_generation_response(project)
+    except Exception as exc:
+        chapter_state.status = "failed"
+        chapter_state.error = "章节剧本生成失败"
+        chapter_state.scene_count = 0
+        save_generation_state(project, db, payload, states)
+        raise HTTPException(status_code=500, detail="章节剧本生成失败") from exc
 
 
 @router.post("", response_model=ProjectResponse, status_code=status.HTTP_201_CREATED)
@@ -74,11 +283,7 @@ def parse_project_chapters(
     payload["analysisMode"] = ""
     payload["analysisError"] = ""
     payload["analysisAttempts"] = 0
-    payload["scenes"] = []
-    payload["generationStatus"] = "pending"
-    payload["generationMode"] = ""
-    payload["generationError"] = ""
-    payload["generationAttempts"] = 0
+    reset_generation(payload)
     project.data = payload
     db.commit()
     db.refresh(project)
@@ -116,13 +321,9 @@ def analyze_project(project_id: str, db: Session = Depends(get_db)) -> StoryAnal
                 "analysisStatus": "completed",
                 "analysisMode": analysis_mode,
                 "analysisError": analysis_error,
-                "scenes": [],
-                "generationStatus": "pending",
-                "generationMode": "",
-                "generationError": "",
-                "generationAttempts": 0,
             }
         )
+        reset_generation(payload)
         project.data = dict(payload)
         db.commit()
         db.refresh(project)
@@ -144,66 +345,29 @@ def analyze_project(project_id: str, db: Session = Depends(get_db)) -> StoryAnal
 def generate_project_script(project_id: str, db: Session = Depends(get_db)) -> ScriptGenerationResponse:
     project = get_project_or_404(project_id, db)
     chapters = [Chapter.model_validate(chapter) for chapter in project.data.get("chapters", [])]
-    characters = [Character.model_validate(character) for character in project.data.get("characters", [])]
-    if len(chapters) < 3:
-        raise HTTPException(status_code=409, detail="至少需要 3 个章节才能生成剧本")
+    initialize_generation(project, db)
+    for chapter in chapters:
+        generate_chapter(project, chapter.id, db)
+    return script_generation_response(project)
 
-    payload = dict(project.data)
-    attempts = int(payload.get("generationAttempts", 0)) + 1
-    try:
-        scenes, generation_mode, generation_error = generate_script_with_fallback(
-            title=project.title,
-            summary=payload.get("summary", ""),
-            genre=payload.get("genre", ""),
-            style=payload.get("style", ""),
-            adaptation_mode=payload.get("adaptationMode", "忠于原著"),
-            script_type=payload.get("scriptType", "电影"),
-            chapters=chapters,
-            characters=characters,
-        )
-        payload.update(
-            {
-                "scenes": [scene.model_dump(mode="json") for scene in scenes],
-                "generationStatus": "completed",
-                "generationMode": generation_mode,
-                "generationError": generation_error,
-                "generationAttempts": attempts,
-            }
-        )
-        project.data = dict(payload)
-        db.commit()
-        db.refresh(project)
-        return ScriptGenerationResponse(
-            scenes=scenes,
-            scene_count=len(scenes),
-            generation_status="completed",
-            generation_mode=generation_mode,
-            generation_attempts=attempts,
-            generation_error=generation_error,
-        )
-    except Exception as exc:
-        payload.update(
-            {
-                "generationStatus": "failed",
-                "generationError": "剧本生成失败",
-                "generationAttempts": attempts,
-            }
-        )
-        project.data = dict(payload)
-        db.commit()
-        raise HTTPException(status_code=500, detail="剧本生成失败") from exc
+
+@router.post("/{project_id}/generation/start", response_model=GenerationStatusResponse)
+def start_project_generation(project_id: str, db: Session = Depends(get_db)) -> GenerationStatusResponse:
+    return initialize_generation(get_project_or_404(project_id, db), db)
+
+
+@router.post("/{project_id}/chapters/{chapter_id}/generate", response_model=ScriptGenerationResponse)
+def generate_project_chapter(
+    project_id: str,
+    chapter_id: str,
+    db: Session = Depends(get_db),
+) -> ScriptGenerationResponse:
+    return generate_chapter(get_project_or_404(project_id, db), chapter_id, db)
 
 
 @router.get("/{project_id}/generation-status", response_model=GenerationStatusResponse)
 def get_generation_status(project_id: str, db: Session = Depends(get_db)) -> GenerationStatusResponse:
-    project = get_project_or_404(project_id, db)
-    return GenerationStatusResponse(
-        status=project.data.get("generationStatus", "pending"),
-        mode=project.data.get("generationMode", ""),
-        attempts=int(project.data.get("generationAttempts", 0)),
-        error=project.data.get("generationError", ""),
-        scene_count=len(project.data.get("scenes", [])),
-    )
+    return generation_status_response(get_project_or_404(project_id, db))
 
 
 @router.get("/{project_id}", response_model=ProjectResponse)

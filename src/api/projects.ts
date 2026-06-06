@@ -1,4 +1,4 @@
-import type { Chapter, Project, Scene } from '../types'
+import type { Chapter, GenerationChapterState, Project, Scene } from '../types'
 
 interface ProjectResponse {
   id: string
@@ -43,6 +43,16 @@ export interface ScriptGenerationResponse {
   generation_mode: string
   generation_attempts: number
   generation_error: string
+  chapter_statuses: GenerationChapterState[]
+}
+
+export interface GenerationStatusResponse {
+  status: Project['generationStatus']
+  mode: string
+  attempts: number
+  error: string
+  scene_count: number
+  chapter_statuses: GenerationChapterState[]
 }
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000'
@@ -101,4 +111,16 @@ export async function analyzeProject(projectId: string): Promise<StoryAnalysisRe
 
 export async function generateProjectScript(projectId: string): Promise<ScriptGenerationResponse> {
   return request<ScriptGenerationResponse>(`/api/projects/${projectId}/generate`, { method: 'POST' })
+}
+
+export async function startProjectGeneration(projectId: string): Promise<GenerationStatusResponse> {
+  return request<GenerationStatusResponse>(`/api/projects/${projectId}/generation/start`, { method: 'POST' })
+}
+
+export async function generateProjectChapter(projectId: string, chapterId: string): Promise<ScriptGenerationResponse> {
+  return request<ScriptGenerationResponse>(`/api/projects/${projectId}/chapters/${chapterId}/generate`, { method: 'POST' })
+}
+
+export async function getProjectGenerationStatus(projectId: string): Promise<GenerationStatusResponse> {
+  return request<GenerationStatusResponse>(`/api/projects/${projectId}/generation-status`)
 }

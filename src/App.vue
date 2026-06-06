@@ -30,6 +30,7 @@ project.generationStatus ??= project.scenes.length ? 'completed' : 'pending'
 project.generationMode ??= project.scenes.length ? 'legacy-local' : ''
 project.generationError ??= ''
 project.generationAttempts ??= 0
+project.generationChapters ??= []
 const remoteProjectId = ref(localStorage.getItem('storyforge-project-id') ?? '')
 const projectHistory = ref<ProjectSummary[]>([])
 
@@ -235,6 +236,7 @@ async function newProject() {
     generationMode: '',
     generationError: '',
     generationAttempts: 0,
+    generationChapters: [],
   })
   view.value = 'import'
   await saveProjectToBackend()
