@@ -57,7 +57,7 @@ def ai_status() -> AIStatusResponse:
     settings = get_llm_settings()
     return AIStatusResponse(
         configured=settings.configured,
-        provider="openai-responses",
+        provider=settings.provider,
         model=settings.model,
         fallback="local-rules",
     )

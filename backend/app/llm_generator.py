@@ -1,9 +1,7 @@
-import json
-
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from .llm_analyzer import LLMAnalysisError, extract_output_text
+from .llm_client import LLMAnalysisError, request_structured_output
 from .schemas import Chapter, Character, Dialogue, Scene
 from .script_generator import build_local_scenes
 from .settings import LLMSettings, get_llm_settings
@@ -121,51 +119,34 @@ def generate_script_with_model(
     if not settings.configured:
         raise LLMAnalysisError("未配置大模型 API Key")
 
-    payload = {
-        "model": settings.model,
-        "store": False,
-        "instructions": (
-            "你是专业的中文影视编剧。请忠于输入原文，将每章改编成可拍摄的结构化场景。"
-            "不要虚构改变主线的新事件，动作应可视化，对白应符合人物身份。"
-        ),
-        "input": build_generation_input(
-            title,
-            summary,
-            genre,
-            style,
-            adaptation_mode,
-            script_type,
-            chapters,
-            characters,
-            settings.max_input_chars,
-            dialogue_density,
-            target_scene_count,
-        ),
-        "text": {
-            "format": {
-                "type": "json_schema",
-                "name": "script_generation",
-                "strict": True,
-                "schema": LLMScript.model_json_schema(),
-            }
-        },
-    }
-    owns_client = client is None
-    client = client or httpx.Client(timeout=settings.timeout_seconds)
     try:
-        response = client.post(
-            f"{settings.base_url}/responses",
-            headers={"Authorization": f"Bearer {settings.api_key}", "Content-Type": "application/json"},
-            json=payload,
+        output = request_structured_output(
+            settings,
+            (
+                "你是专业的中文影视编剧。请忠于输入原文，将每章改编成可拍摄的结构化场景。"
+                "不要虚构改变主线的新事件，动作应可视化，对白应符合人物身份。"
+            ),
+            build_generation_input(
+                title,
+                summary,
+                genre,
+                style,
+                adaptation_mode,
+                script_type,
+                chapters,
+                characters,
+                settings.max_input_chars,
+                dialogue_density,
+                target_scene_count,
+            ),
+            LLMScript.model_json_schema(),
+            "script_generation",
+            client,
         )
-        response.raise_for_status()
-        script = LLMScript.model_validate_json(extract_output_text(response.json()))
+        script = LLMScript.model_validate_json(output)
         return convert_model_script(script, chapters)
-    except (httpx.HTTPError, json.JSONDecodeError, ValidationError, ValueError) as exc:
+    except (LLMAnalysisError, ValidationError, ValueError) as exc:
         raise LLMAnalysisError("大模型剧本生成或结构化结果校验失败") from exc
-    finally:
-        if owns_client:
-            client.close()
 
 
 def generate_script_with_fallback(
@@ -201,7 +182,7 @@ def generate_script_with_fallback(
             target_scene_count,
             settings=settings,
         )
-        return scenes, f"openai-responses:{settings.model}", ""
+        return scenes, settings.mode, ""
     except LLMAnalysisError as exc:
         return (
             build_local_scenes(chapters, characters, genre, style, dialogue_density, target_scene_count),

@@ -62,11 +62,15 @@ cp backend/.env.example backend/.env
 
 ```dotenv
 STORYFORGE_LLM_API_KEY=你的_API_Key
-STORYFORGE_LLM_BASE_URL=https://api.openai.com/v1
-STORYFORGE_LLM_MODEL=gpt-5-mini
+STORYFORGE_LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+STORYFORGE_LLM_MODEL=qwen-plus
+STORYFORGE_LLM_PROVIDER=dashscope-chat-completions
+STORYFORGE_LLM_API_STYLE=chat-completions
 ```
 
-重新启动后端后，`POST /api/projects/{id}/analyze` 会优先使用 OpenAI Responses API，并通过 JSON Schema 和 Pydantic 校验结构化结果。未配置密钥、模型请求失败或结果校验失败时，会自动回退本地规则分析。
+重新启动后端后，`POST /api/projects/{id}/analyze` 会优先使用配置的真实模型。DashScope 的 `qwen-plus` 通过 OpenAI 兼容的 Chat Completions JSON Mode 返回结构化结果，再由 Pydantic 执行严格校验。未配置密钥、模型请求失败或结果校验失败时，会自动回退本地规则分析。
+
+后端同时保留 OpenAI Responses API 兼容能力。接入支持 Responses JSON Schema 的服务时，将 `STORYFORGE_LLM_API_STYLE` 设置为 `responses`，并配置对应的 Base URL、模型与提供商名称。
 
 同一模型配置也用于剧本生成。前端先初始化逐章任务，再按章节逐个调用生成接口；每章完成后会立即保存场景和章节状态到 SQLite。失败章节与已完成章节都可以单独重新生成，不会重新调用其他章节。未配置密钥或模型调用失败时自动使用后端本地规则生成。
 
@@ -76,7 +80,7 @@ STORYFORGE_LLM_MODEL=gpt-5-mini
 
 YAML 导出使用 `storyforge-script/v1` 正式 Pydantic/JSON Schema，并校验作品标题、唯一章节与场景编号、每章至少一个场景、来源章节、动作描述、人物关系、出场人物和对白人物关系。结构无效时返回 `422` 和具体错误列表，校验通过后才返回 UTF-8 YAML 文件。
 
-单场景润色接口在已配置模型时调用 Responses API；未配置或调用失败时使用后端本地规则，并持久化润色后的场景。
+单场景润色接口在已配置模型时调用对应的真实模型接口；未配置或调用失败时使用后端本地规则，并持久化润色后的场景。
 
 ## 部署与安全配置
 
