@@ -12,6 +12,7 @@ export interface AIStatus {
 }
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000'
+const apiToken = import.meta.env.VITE_API_TOKEN || ''
 
 export async function checkBackendHealth(): Promise<boolean> {
   const controller = new AbortController()
@@ -35,7 +36,10 @@ export async function checkBackendHealth(): Promise<boolean> {
 
 export async function getAIStatus(): Promise<AIStatus> {
   const response = await fetch(`${apiBaseUrl}/api/ai/status`, {
-    headers: { Accept: 'application/json' },
+    headers: {
+      Accept: 'application/json',
+      ...(apiToken ? { Authorization: `Bearer ${apiToken}` } : {}),
+    },
   })
   if (!response.ok) throw new Error(`AI 状态接口请求失败：${response.status}`)
   return (await response.json()) as AIStatus

@@ -13,19 +13,22 @@ import {
   GripVertical,
   ListPlus,
   MessageSquareText,
-  MoreHorizontal,
   Plus,
-  RotateCw,
   Save,
   Sparkles,
   Trash2,
   X,
 } from 'lucide-vue-next'
-import { exportProjectYaml, updateProject, validateProjectYaml } from '../api/projects'
+import { exportProjectYaml, polishProjectScene, validateProjectYaml } from '../api/projects'
 import type { Project, Scene } from '../types'
-import { downloadText, projectToYaml, validateProjectScript } from '../utils'
+import { downloadText, nextSceneId, projectToYaml, syncGenerationStats, validateProjectScript } from '../utils'
 
-const props = defineProps<{ project: Project; projectId: string; backendConnected: boolean }>()
+const props = defineProps<{
+  project: Project
+  projectId: string
+  backendConnected: boolean
+  saveProject: () => Promise<boolean>
+}>()
 const emit = defineEmits<{ back: []; notify: [message: string]; save: [] }>()
 const activeId = ref(props.project.scenes[0]?.id ?? '')
 const rightTab = ref<'yaml' | 'source'>('yaml')
@@ -34,6 +37,8 @@ const polishInstruction = ref('减少旁白，增加对白，让冲突更强烈'
 const isExporting = ref(false)
 const characterPickerOpen = ref(false)
 const scenePendingDelete = ref<Scene | null>(null)
+const collapsedChapterIds = ref(new Set<string>())
+const isPolishing = ref(false)
 
 const activeScene = computed(() => props.project.scenes.find((scene) => scene.id === activeId.value) ?? props.project.scenes[0])
 const yamlText = computed(() => projectToYaml(props.project))
@@ -54,9 +59,14 @@ function addAction() {
 }
 
 function addDialogue() {
+  const speaker = activeScene.value.characters[0]
+  if (!speaker) {
+    emit('notify', '请先为本场添加出场人物，再添加对白')
+    return
+  }
   activeScene.value.dialogues.push({
     id: `dialogue-${Date.now()}`,
-    character: activeScene.value.characters[0] ?? '角色',
+    character: speaker,
     emotion: '平静',
     line: '输入人物对白…',
   })
@@ -92,10 +102,22 @@ function moveDialogue(index: number, direction: number) {
   activeScene.value.dialogues.splice(target, 0, dialogue)
 }
 
+function moveAction(index: number, direction: number) {
+  const target = index + direction
+  if (target < 0 || target >= activeScene.value.actions.length) return
+  const [action] = activeScene.value.actions.splice(index, 1)
+  activeScene.value.actions.splice(target, 0, action)
+}
+
 function addScene() {
-  const chapter = props.project.chapters[props.project.chapters.length - 1]
+  const chapter = props.project.chapters.find((item) => item.id === activeScene.value?.chapterId)
+    ?? props.project.chapters[0]
+  if (!chapter) {
+    emit('notify', '请先识别并保留至少一个章节')
+    return
+  }
   const scene: Scene = {
-    id: `SC-${String(props.project.scenes.length + 1).padStart(2, '0')}`,
+    id: nextSceneId(props.project.scenes),
     chapterId: chapter.id,
     sourceChapter: chapter.title,
     title: '新场景',
@@ -109,6 +131,7 @@ function addScene() {
   }
   props.project.scenes.push(scene)
   activeId.value = scene.id
+  syncGenerationStats(props.project)
   emit('notify', '已添加新场景')
 }
 
@@ -127,7 +150,24 @@ function confirmRemoveScene() {
   props.project.scenes.splice(index, 1)
   activeId.value = props.project.scenes[Math.max(0, index - 1)].id
   scenePendingDelete.value = null
+  syncGenerationStats(props.project)
   emit('notify', '场景已删除')
+}
+
+function changeSceneChapter() {
+  const chapter = props.project.chapters.find((item) => item.id === activeScene.value.chapterId)
+  if (!chapter) return
+  activeScene.value.sourceChapter = chapter.title
+  activeScene.value.sourceSummary = chapter.summary
+  syncGenerationStats(props.project)
+  emit('notify', `场景已移动到“${chapter.title}”`)
+}
+
+function toggleChapter(chapterId: string) {
+  const next = new Set(collapsedChapterIds.value)
+  if (next.has(chapterId)) next.delete(chapterId)
+  else next.add(chapterId)
+  collapsedChapterIds.value = next
 }
 
 function copyYaml() {
@@ -147,7 +187,7 @@ async function downloadYaml() {
   isExporting.value = true
   try {
     if (props.backendConnected && props.projectId) {
-      await updateProject(props.projectId, JSON.parse(JSON.stringify(props.project)) as Project)
+      if (!await props.saveProject()) return
       const validation = await validateProjectYaml(props.projectId)
       if (!validation.valid) {
         emit('notify', `服务端校验失败：${validation.errors[0]}`)
@@ -166,11 +206,59 @@ async function downloadYaml() {
   }
 }
 
-function applyPolish() {
-  activeScene.value.atmosphere = `${activeScene.value.atmosphere}、冲突升级`
-  activeScene.value.actions.push('两人短暂对峙，空气里的沉默比回答更有分量。')
+function applyLocalPolish(instruction: string) {
+  if (/夜晚|夜景|改成夜/.test(instruction)) activeScene.value.time = '夜'
+  if (/冲突|紧张|对峙/.test(instruction)) {
+    activeScene.value.atmosphere = `${activeScene.value.atmosphere.replace(/、冲突升级$/, '')}、冲突升级`
+    activeScene.value.actions.push('人物的目标正面碰撞，现场气氛骤然收紧。')
+  }
+  if (/对白|对话/.test(instruction)) {
+    const speaker = activeScene.value.characters[0] ?? props.project.characters[0]?.name
+    if (speaker) {
+      if (!activeScene.value.characters.includes(speaker)) activeScene.value.characters.push(speaker)
+      activeScene.value.dialogues.push({
+        id: `dialogue-${Date.now()}`,
+        character: speaker,
+        emotion: '坚定',
+        line: '把真正想说的话说出来。',
+      })
+    } else {
+      activeScene.value.actions.push('人物欲言又止，未说出口的话让气氛更紧张。')
+    }
+  }
+  if (!/夜晚|夜景|改成夜|冲突|紧张|对峙|对白|对话/.test(instruction)) {
+    activeScene.value.actions.push(`本地规则调整提示：${instruction || '强化当前场景的画面表达。'}`)
+  }
+}
+
+async function applyPolish() {
+  const instruction = polishInstruction.value.trim()
+  if (!instruction || isPolishing.value) return
+  isPolishing.value = true
+  try {
+    if (props.backendConnected && props.projectId) {
+      if (!await props.saveProject()) return
+      const result = await polishProjectScene(props.projectId, activeScene.value.id, instruction)
+      Object.assign(activeScene.value, result.scene)
+      emit(
+        'notify',
+        result.mode.startsWith('openai-responses:')
+          ? '大模型已润色并保存当前场景'
+          : result.mode === 'local-rules-fallback'
+            ? '模型调用失败，已回退本地规则润色'
+            : '已使用后端本地规则润色当前场景',
+      )
+    } else {
+      applyLocalPolish(instruction)
+      emit('notify', '后端未连接，已使用浏览器本地规则润色')
+    }
+  } catch {
+    emit('notify', '场景润色失败，请检查后端连接后重试')
+    return
+  } finally {
+    isPolishing.value = false
+  }
   polishOpen.value = false
-  emit('notify', 'AI 已根据指令润色当前场景')
 }
 
 function moveScene(direction: number) {
@@ -202,11 +290,13 @@ function moveScene(direction: number) {
         <div class="sidebar-head"><span>章节与场景</span><button @click="addScene"><Plus :size="15" /></button></div>
         <div class="scene-tree">
           <div v-for="group in groupedScenes" :key="group.chapter.id" class="tree-group">
-            <div class="tree-chapter"><ChevronDown :size="13" /><span>{{ group.chapter.title }}</span><small>{{ group.scenes.length }}</small></div>
-            <button v-for="scene in group.scenes" :key="scene.id" :class="{ active: scene.id === activeId }" @click="activeId = scene.id">
+            <div class="tree-chapter" role="button" tabindex="0" @click="toggleChapter(group.chapter.id)" @keydown.enter="toggleChapter(group.chapter.id)">
+              <ChevronDown :size="13" :class="{ collapsed: collapsedChapterIds.has(group.chapter.id) }" />
+              <span>{{ group.chapter.title }}</span><small>{{ group.scenes.length }}</small>
+            </div>
+            <button v-for="scene in collapsedChapterIds.has(group.chapter.id) ? [] : group.scenes" :key="scene.id" :class="{ active: scene.id === activeId }" @click="activeId = scene.id">
               <span class="scene-code">{{ scene.id }}</span>
               <span><b>{{ scene.title }}</b><small>{{ scene.location }} · {{ scene.time }}</small></span>
-              <MoreHorizontal :size="14" />
             </button>
           </div>
         </div>
@@ -220,13 +310,14 @@ function moveScene(direction: number) {
             <button class="icon-button" title="上移" @click="moveScene(-1)"><ArrowUp :size="15" /></button>
             <button class="icon-button" title="下移" @click="moveScene(1)"><ArrowDown :size="15" /></button>
             <button class="icon-button danger" title="删除场景" @click="requestRemoveScene"><Trash2 :size="15" /></button>
-            <button class="button magic small" @click="polishOpen = true"><Sparkles :size="15" /> AI 润色</button>
+            <button class="button magic small" @click="polishOpen = true"><Sparkles :size="15" /> 润色当前场景</button>
           </div>
         </div>
 
         <div class="editor-scroll">
           <label class="scene-title-input"><span>场景标题</span><input v-model="activeScene.title" /></label>
-          <div class="scene-meta-grid">
+          <div class="scene-meta-grid four">
+            <label><span>所属章节</span><select v-model="activeScene.chapterId" @change="changeSceneChapter"><option v-for="chapter in project.chapters" :key="chapter.id" :value="chapter.id">{{ chapter.title }}</option></select></label>
             <label><span>地点</span><input v-model="activeScene.location" /></label>
             <label><span>时间</span><input v-model="activeScene.time" /></label>
             <label><span>氛围</span><input v-model="activeScene.atmosphere" /></label>
@@ -248,7 +339,12 @@ function moveScene(direction: number) {
             <div class="editor-section-title"><span>动作描述</span><button @click="addAction"><Plus :size="13" /> 添加动作</button></div>
             <div class="action-list">
               <div v-for="(_, index) in activeScene.actions" :key="index" class="action-row">
-                <GripVertical :size="15" /><span>{{ String(index + 1).padStart(2, '0') }}</span><textarea v-model="activeScene.actions[index]" rows="2"></textarea>
+                <GripVertical :size="15" />
+                <div class="row-move-actions">
+                  <button title="上移动作" :disabled="index === 0" @click="moveAction(index, -1)"><ArrowUp :size="12" /></button>
+                  <button title="下移动作" :disabled="index === activeScene.actions.length - 1" @click="moveAction(index, 1)"><ArrowDown :size="12" /></button>
+                </div>
+                <span>{{ String(index + 1).padStart(2, '0') }}</span><textarea v-model="activeScene.actions[index]" rows="2"></textarea>
                 <button @click="activeScene.actions.splice(index, 1)"><X :size="13" /></button>
               </div>
             </div>
@@ -300,12 +396,12 @@ function moveScene(direction: number) {
         <div class="polish-modal">
           <button class="modal-close" @click="polishOpen = false"><X :size="17" /></button>
           <div class="generate-mark small"><Sparkles :size="18" /></div>
-          <span class="section-index">AI SCENE REWRITE</span>
-          <h3>想怎样调整这个场景？</h3>
-          <p>AI 只会修改当前场景，不影响其他章节。</p>
+          <span class="section-index">SCENE REWRITE</span>
+          <h3>调整当前场景</h3>
+          <p>后端已配置模型时优先调用真实模型；未配置、调用失败或离线时使用可解释的本地规则。</p>
           <textarea v-model="polishInstruction" rows="4"></textarea>
           <div class="prompt-chips"><button @click="polishInstruction = '让冲突更强烈'">冲突更强烈</button><button @click="polishInstruction = '减少旁白，增加对白'">增加对白</button><button @click="polishInstruction = '保持剧情不变，改成夜晚'">改成夜晚</button></div>
-          <button class="button primary full" @click="applyPolish"><Sparkles :size="15" /> 应用 AI 润色</button>
+          <button class="button primary full" :disabled="isPolishing || !polishInstruction.trim()" @click="applyPolish"><Sparkles :size="15" /> {{ isPolishing ? '润色中…' : '润色当前场景' }}</button>
         </div>
       </div>
     </Transition>

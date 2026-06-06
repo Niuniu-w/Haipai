@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from urllib.parse import quote
@@ -7,7 +7,9 @@ from .chapter_parser import parse_chapters
 from .database import get_db
 from .llm_analyzer import analyze_story_with_fallback
 from .llm_generator import generate_script_with_fallback
+from .llm_polisher import polish_scene_with_fallback
 from .models import ProjectRecord
+from .script_generator import distribute_scene_counts
 from .schemas import (
     Chapter,
     ChapterParseRequest,
@@ -20,13 +22,20 @@ from .schemas import (
     ProjectResponse,
     ProjectSummary,
     Scene,
+    ScenePolishRequest,
+    ScenePolishResponse,
     ScriptGenerationResponse,
     ScriptValidationResponse,
     StoryAnalysisResponse,
 )
-from .yaml_export import dump_project_yaml, validate_project_script
+from .yaml_export import dump_project_yaml, script_schema, validate_project_script
 
 router = APIRouter(prefix="/api/projects", tags=["项目"])
+
+
+@router.get("/script-schema", tags=["项目"])
+def get_script_schema() -> dict:
+    return script_schema()
 
 
 def get_project_or_404(project_id: str, db: Session) -> ProjectRecord:
@@ -50,6 +59,84 @@ def reset_generation(payload: dict) -> None:
             "generationAttempts": 0,
             "generationChapters": [],
         }
+    )
+
+
+def reset_analysis(payload: dict) -> None:
+    payload.update(
+        {
+            "summary": "",
+            "genre": "",
+            "style": "",
+            "era": "",
+            "characters": [],
+            "relationships": [],
+            "analysisStatus": "pending",
+            "analysisMode": "",
+            "analysisError": "",
+            "analysisAttempts": 0,
+        }
+    )
+    reset_generation(payload)
+
+
+def sync_generation_from_scenes(payload: dict) -> None:
+    stored = {
+        item.get("chapter_id", ""): item
+        for item in payload.get("generationChapters", [])
+    }
+    states = []
+    for chapter in payload.get("chapters", []):
+        chapter_id = chapter.get("id", "")
+        scene_count = sum(scene.get("chapterId") == chapter_id for scene in payload.get("scenes", []))
+        previous = stored.get(chapter_id, {})
+        states.append(
+            {
+                "chapter_id": chapter_id,
+                "status": "completed" if scene_count else "pending",
+                "mode": previous.get("mode", payload.get("generationMode", "")) if scene_count else "",
+                "attempts": int(previous.get("attempts", 0)),
+                "error": "",
+                "scene_count": scene_count,
+            }
+        )
+    payload["generationChapters"] = states
+    payload["generationStatus"] = (
+        "completed"
+        if states and all(state["status"] == "completed" for state in states)
+        else "pending"
+    )
+    payload["generationError"] = ""
+    if not payload.get("scenes"):
+        payload["generationMode"] = ""
+
+
+def check_update_revision(project: ProjectRecord, if_match: str | None) -> int:
+    current = int(project.data.get("revision", 0))
+    if not if_match:
+        raise HTTPException(status_code=428, detail="更新项目必须提供 If-Match 项目版本号")
+    try:
+        expected = int(if_match)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="If-Match 必须是有效的项目版本号") from exc
+    if expected != current:
+        raise HTTPException(status_code=409, detail="项目已在其他请求中更新，请重新加载后再保存")
+    return current
+
+
+def chapter_sources(payload: dict) -> list[tuple[str, str, str]]:
+    return [
+        (chapter.get("id", ""), chapter.get("title", ""), chapter.get("content", ""))
+        for chapter in payload.get("chapters", [])
+    ]
+
+
+def target_scenes_for_chapter(payload: dict, chapters: list[Chapter], chapter_id: str) -> int:
+    target_total = max(len(chapters), int(payload.get("targetSceneCount", 0) or len(chapters)))
+    counts = distribute_scene_counts(len(chapters), target_total)
+    return next(
+        (counts[index] for index, chapter in enumerate(chapters) if chapter.id == chapter_id),
+        1,
     )
 
 
@@ -224,6 +311,8 @@ def generate_chapter(project: ProjectRecord, chapter_id: str, db: Session) -> Sc
             script_type=payload.get("scriptType", "电影"),
             chapters=[chapter],
             characters=characters,
+            dialogue_density=payload.get("dialogueDensity", "均衡"),
+            target_scene_count=target_scenes_for_chapter(payload, chapters, chapter_id),
         )
         existing_scenes = [
             Scene.model_validate(scene)
@@ -282,11 +371,7 @@ def parse_project_chapters(
     payload = dict(project.data)
     payload["rawText"] = request.raw_text
     payload["chapters"] = [chapter.model_dump(mode="json") for chapter in chapters]
-    payload["analysisStatus"] = "pending"
-    payload["analysisMode"] = ""
-    payload["analysisError"] = ""
-    payload["analysisAttempts"] = 0
-    reset_generation(payload)
+    reset_analysis(payload)
     project.data = payload
     db.commit()
     db.refresh(project)
@@ -368,6 +453,29 @@ def generate_project_chapter(
     return generate_chapter(get_project_or_404(project_id, db), chapter_id, db)
 
 
+@router.post("/{project_id}/scenes/{scene_id}/polish", response_model=ScenePolishResponse)
+def polish_project_scene(
+    project_id: str,
+    scene_id: str,
+    request: ScenePolishRequest,
+    db: Session = Depends(get_db),
+) -> ScenePolishResponse:
+    project = get_project_or_404(project_id, db)
+    payload = dict(project.data)
+    scenes = [Scene.model_validate(scene) for scene in payload.get("scenes", [])]
+    scene_index = next((index for index, scene in enumerate(scenes) if scene.id == scene_id), None)
+    if scene_index is None:
+        raise HTTPException(status_code=404, detail="场景不存在")
+    characters = [Character.model_validate(character) for character in payload.get("characters", [])]
+    polished, mode, error = polish_scene_with_fallback(scenes[scene_index], request.instruction, characters)
+    scenes[scene_index] = polished
+    payload["scenes"] = [scene.model_dump(mode="json") for scene in scenes]
+    project.data = payload
+    db.commit()
+    db.refresh(project)
+    return ScenePolishResponse(scene=polished, mode=mode, error=error)
+
+
 @router.get("/{project_id}/generation-status", response_model=GenerationStatusResponse)
 def get_generation_status(project_id: str, db: Session = Depends(get_db)) -> GenerationStatusResponse:
     return generation_status_response(get_project_or_404(project_id, db))
@@ -400,10 +508,23 @@ def get_project(project_id: str, db: Session = Depends(get_db)) -> ProjectRespon
 
 
 @router.put("/{project_id}", response_model=ProjectResponse)
-def update_project(project_id: str, data: ProjectData, db: Session = Depends(get_db)) -> ProjectResponse:
+def update_project(
+    project_id: str,
+    data: ProjectData,
+    db: Session = Depends(get_db),
+    if_match: str | None = Header(default=None, alias="If-Match"),
+) -> ProjectResponse:
     project = get_project_or_404(project_id, db)
+    revision = check_update_revision(project, if_match)
+    previous_payload = dict(project.data)
+    payload = data.model_dump(mode="json", by_alias=True)
+    if chapter_sources(previous_payload) != chapter_sources(payload):
+        reset_analysis(payload)
+    elif previous_payload.get("scenes", []) != payload.get("scenes", []):
+        sync_generation_from_scenes(payload)
+    payload["revision"] = revision + 1
     project.title = data.title
-    project.data = data.model_dump(mode="json", by_alias=True)
+    project.data = payload
     db.commit()
     db.refresh(project)
     return project_response(project)

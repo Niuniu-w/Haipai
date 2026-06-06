@@ -26,18 +26,36 @@ function chapterMetadata(content: string) {
   }
 }
 
+function invalidateChapterDerivedData() {
+  props.project.summary = ''
+  props.project.genre = ''
+  props.project.style = ''
+  props.project.era = ''
+  props.project.characters = []
+  props.project.relationships = []
+  props.project.scenes = []
+  props.project.analysisStatus = 'pending'
+  props.project.analysisMode = ''
+  props.project.analysisError = ''
+  props.project.analysisAttempts = 0
+  props.project.generationStatus = 'pending'
+  props.project.generationMode = ''
+  props.project.generationError = ''
+  props.project.generationAttempts = 0
+  props.project.generationChapters = []
+  parseSource.value = ''
+}
+
+function replaceChapters(chapters: Project['chapters']) {
+  props.project.chapters = chapters
+  invalidateChapterDerivedData()
+}
+
 function refreshChapterMetadata(index: number) {
   const chapter = props.project.chapters[index]
   if (!chapter) return
   Object.assign(chapter, chapterMetadata(chapter.content))
-}
-
-function syncChapterTitle(chapterId: string, title: string) {
-  props.project.scenes
-    .filter((scene) => scene.chapterId === chapterId)
-    .forEach((scene) => {
-      scene.sourceChapter = title
-    })
+  invalidateChapterDerivedData()
 }
 
 function splitChapter() {
@@ -64,7 +82,7 @@ function splitChapter() {
     ...chapterMetadata(secondContent),
   })
   selectedChapter.value += 1
-  parseSource.value = ''
+  invalidateChapterDerivedData()
   emit('notify', '已按光标位置拆分章节')
 }
 
@@ -79,15 +97,7 @@ function mergeNextChapter() {
   chapter.content = `${chapter.content.trim()}\n\n${nextChapter.content.trim()}`.trim()
   Object.assign(chapter, chapterMetadata(chapter.content))
   props.project.chapters.splice(selectedChapter.value + 1, 1)
-  props.project.scenes
-    .filter((scene) => scene.chapterId === nextChapter.id)
-    .forEach((scene) => {
-      scene.chapterId = chapter.id
-      scene.sourceChapter = chapter.title
-      scene.sourceSummary = chapter.summary
-    })
-  props.project.generationChapters = props.project.generationChapters.filter((state) => state.chapter_id !== nextChapter.id)
-  parseSource.value = ''
+  invalidateChapterDerivedData()
   emit('notify', `已将“${nextChapter.title}”合并到当前章节`)
 }
 
@@ -98,16 +108,16 @@ async function detect() {
   try {
     if (props.backendConnected && props.projectId) {
       const result = await parseProjectChapters(props.projectId, props.project.rawText)
-      props.project.chapters = result.chapters
+      replaceChapters(result.chapters)
       parseSource.value = 'backend'
       emit('notify', `后端已识别 ${result.chapter_count} 个章节${result.valid ? '' : '，至少需要 3 章'}`)
     } else {
-      props.project.chapters = parseChapters(props.project.rawText)
+      replaceChapters(parseChapters(props.project.rawText))
       parseSource.value = 'local'
       emit('notify', `本地已识别 ${props.project.chapters.length} 个章节`)
     }
   } catch {
-    props.project.chapters = parseChapters(props.project.rawText)
+    replaceChapters(parseChapters(props.project.rawText))
     parseSource.value = 'local'
     emit('notify', `后端解析失败，已使用本地规则识别 ${props.project.chapters.length} 个章节`)
   } finally {
@@ -279,7 +289,7 @@ async function handleFile(file?: File) {
             @click="selectedChapter = index"
           >
             <span class="chapter-number">{{ String(index + 1).padStart(2, '0') }}</span>
-            <span class="chapter-info"><input v-model="chapter.title" @click.stop @input="syncChapterTitle(chapter.id, chapter.title)" /><small>{{ chapter.content.length }} 字 · 已识别</small></span>
+            <span class="chapter-info"><input v-model="chapter.title" @click.stop @change="invalidateChapterDerivedData" /><small>{{ chapter.content.length }} 字 · 已识别</small></span>
             <Pencil :size="14" />
           </button>
           <div v-if="!project.chapters.length" class="empty-state">
@@ -300,7 +310,7 @@ async function handleFile(file?: File) {
             ref="chapterContentEditor"
             v-model="project.chapters[selectedChapter].content"
             rows="8"
-            @blur="refreshChapterMetadata(selectedChapter)"
+            @change="refreshChapterMetadata(selectedChapter)"
           ></textarea>
           <small>可直接编辑正文，或把光标放在新的章节边界后点击“按光标拆分”。</small>
         </div>

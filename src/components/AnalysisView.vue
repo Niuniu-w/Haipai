@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { ArrowLeft, ArrowRight, BookMarked, Check, ChevronDown, LoaderCircle, Network, Plus, Sparkles, UserRound } from 'lucide-vue-next'
+import { ArrowLeft, ArrowRight, BookMarked, Check, LoaderCircle, Network, Plus, Sparkles, Trash2, UserRound, X } from 'lucide-vue-next'
 import { analyzeProject } from '../api/projects'
 import type { Project } from '../types'
 
@@ -16,10 +16,11 @@ const activeChapter = ref(0)
 const isAnalyzing = ref(false)
 const modes = ['忠于原著', '影视化增强', '短剧快节奏']
 const scriptTypes = ['电影', '电视剧', '短剧']
+const dialogueDensities: Project['dialogueDensity'][] = ['少量', '均衡', '密集']
 const hasAnalysis = computed(() => Boolean(props.project.summary || props.project.characters.length || props.project.relationships.length))
-const relationCore = computed(() => props.project.relationships[0]?.from ?? props.project.characters[0]?.name ?? '')
 const canAnalyze = computed(() => props.backendConnected && Boolean(props.projectId) && props.project.chapters.length >= 3)
 const characterColors = ['#bd6c55', '#6f8674', '#7c7894', '#b08968', '#617c8b', '#9a6d78']
+const previousCharacterNames = new Map<string, string>()
 
 function addCharacter() {
   const number = props.project.characters.length + 1
@@ -31,6 +32,57 @@ function addCharacter() {
     color: characterColors[(number - 1) % characterColors.length],
   })
   emit('notify', '已添加人物，可直接编辑人物信息')
+}
+
+function rememberCharacterName(characterId: string, name: string) {
+  previousCharacterNames.set(characterId, name)
+}
+
+function syncCharacterName(characterId: string, name: string) {
+  const previous = previousCharacterNames.get(characterId)
+  previousCharacterNames.delete(characterId)
+  if (!previous || previous === name) return
+  props.project.relationships.forEach((relationship) => {
+    if (relationship.from === previous) relationship.from = name
+    if (relationship.to === previous) relationship.to = name
+  })
+  props.project.scenes.forEach((scene) => {
+    scene.characters = scene.characters.map((character) => character === previous ? name : character)
+    scene.dialogues.forEach((dialogue) => {
+      if (dialogue.character === previous) dialogue.character = name
+    })
+  })
+  emit('notify', `已同步更新“${previous}”的全部引用`)
+}
+
+function removeCharacter(characterId: string) {
+  const character = props.project.characters.find((item) => item.id === characterId)
+  if (!character || !window.confirm(`确认删除人物“${character.name}”？相关人物关系和对白也会删除。`)) return
+  props.project.characters = props.project.characters.filter((item) => item.id !== characterId)
+  props.project.relationships = props.project.relationships.filter(
+    (relationship) => relationship.from !== character.name && relationship.to !== character.name,
+  )
+  props.project.scenes.forEach((scene) => {
+    scene.characters = scene.characters.filter((name) => name !== character.name)
+    scene.dialogues = scene.dialogues.filter((dialogue) => dialogue.character !== character.name)
+  })
+  emit('notify', `已删除人物“${character.name}”及其引用`)
+}
+
+function addRelationship() {
+  if (props.project.characters.length < 2) {
+    emit('notify', '至少需要两个人物才能添加关系')
+    return
+  }
+  props.project.relationships.push({
+    from: props.project.characters[0].name,
+    to: props.project.characters[1].name,
+    relation: '待补充关系',
+  })
+}
+
+function addKeyEvent() {
+  props.project.chapters[activeChapter.value]?.keyEvents.push('补充关键事件')
 }
 
 async function runAnalysis() {
@@ -122,10 +174,17 @@ async function runAnalysis() {
             <article v-for="character in project.characters" :key="character.id" class="character-card">
               <div class="character-avatar" :style="{ background: character.color }">{{ character.name.slice(0, 1) }}</div>
               <div class="character-fields">
-                <input v-model="character.name" class="character-name" aria-label="人物名称" />
+                <input
+                  v-model="character.name"
+                  class="character-name"
+                  aria-label="人物名称"
+                  @focus="rememberCharacterName(character.id, character.name)"
+                  @change="syncCharacterName(character.id, character.name)"
+                />
                 <input v-model="character.role" class="character-role" aria-label="人物角色" />
                 <textarea v-model="character.description" rows="2" aria-label="人物简介"></textarea>
               </div>
+              <button class="card-remove" :title="`删除 ${character.name}`" @click="removeCharacter(character.id)"><Trash2 :size="13" /></button>
             </article>
           </div>
         </div>
@@ -139,8 +198,16 @@ async function runAnalysis() {
             <button v-for="(chapter, index) in project.chapters" :key="chapter.id" :class="{ active: index === activeChapter }" @click="activeChapter = index">{{ index + 1 }}</button>
           </div>
           <div v-if="project.chapters[activeChapter]" class="chapter-analysis-body">
-            <div><span class="mini-label">章节概要</span><h3>{{ project.chapters[activeChapter].title }}</h3><p>{{ project.chapters[activeChapter].summary }}</p></div>
-            <div class="events"><span class="mini-label">关键事件</span><ul><li v-for="event in project.chapters[activeChapter].keyEvents" :key="event"><Check :size="13" />{{ event }}</li></ul></div>
+            <div><span class="mini-label">章节概要</span><h3>{{ project.chapters[activeChapter].title }}</h3><textarea v-model="project.chapters[activeChapter].summary" rows="5"></textarea></div>
+            <div class="events">
+              <div class="event-head"><span class="mini-label">关键事件</span><button @click="addKeyEvent"><Plus :size="12" /> 添加</button></div>
+              <ul>
+                <li v-for="(_, eventIndex) in project.chapters[activeChapter].keyEvents" :key="eventIndex">
+                  <Check :size="13" /><input v-model="project.chapters[activeChapter].keyEvents[eventIndex]" />
+                  <button @click="project.chapters[activeChapter].keyEvents.splice(eventIndex, 1)"><X :size="11" /></button>
+                </li>
+              </ul>
+            </div>
           </div>
         </div>
       </div>
@@ -159,18 +226,24 @@ async function runAnalysis() {
           <div class="segmented">
             <button v-for="type in scriptTypes" :key="type" :class="{ active: project.scriptType === type }" @click="project.scriptType = type">{{ type }}</button>
           </div>
-          <div class="setting-row"><span>对白密度</span><b>均衡</b><ChevronDown :size="14" /></div>
-          <div class="setting-row"><span>目标场景数</span><b>{{ project.chapters.length }}–{{ project.chapters.length * 2 }} 场</b><ChevronDown :size="14" /></div>
+          <label class="setting-control"><span>对白密度</span><select v-model="project.dialogueDensity"><option v-for="density in dialogueDensities" :key="density" :value="density">{{ density }}</option></select></label>
+          <label class="setting-control"><span>目标场景数</span><input v-model.number="project.targetSceneCount" type="number" :min="Math.max(project.chapters.length, 1)" :max="Math.max(project.chapters.length * 4, 4)" /></label>
+          <p class="settings-note">目标场景会按章节分配，每章至少一场；真实模型与本地规则都会读取这两个参数。</p>
         </div>
 
         <div class="panel relation-card">
-          <div class="panel-title"><div><Network :size="17" /><b>人物关系</b></div></div>
-          <div v-if="project.relationships.length" class="relation-map">
-            <div class="relation-core">{{ relationCore }}</div>
-            <div v-for="(item, index) in project.relationships.slice(0, 4)" :key="item.to" class="relation-node" :class="`node-${index + 1}`">
-              <b>{{ item.to }}</b><small>{{ item.relation.split(' / ')[0] }}</small>
+          <div class="panel-title">
+            <div><Network :size="17" /><b>人物关系</b></div>
+            <button class="text-button" @click="addRelationship"><Plus :size="13" /> 添加</button>
+          </div>
+          <div v-if="project.relationships.length" class="relation-editor">
+            <div v-for="(item, index) in project.relationships" :key="index" class="relation-editor-row">
+              <select v-model="item.from"><option v-for="character in project.characters" :key="character.id" :value="character.name">{{ character.name }}</option></select>
+              <span>→</span>
+              <select v-model="item.to"><option v-for="character in project.characters" :key="character.id" :value="character.name">{{ character.name }}</option></select>
+              <input v-model="item.relation" placeholder="关系说明" />
+              <button title="删除关系" @click="project.relationships.splice(index, 1)"><Trash2 :size="12" /></button>
             </div>
-            <svg viewBox="0 0 300 220"><line x1="150" y1="110" x2="50" y2="38" /><line x1="150" y1="110" x2="250" y2="38" /><line x1="150" y1="110" x2="50" y2="188" /><line x1="150" y1="110" x2="250" y2="188" /></svg>
           </div>
           <div v-else class="empty-state">
             <Network :size="28" />

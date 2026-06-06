@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -67,11 +68,14 @@ class ProjectData(BaseModel):
     summary: str
     adaptationMode: str
     scriptType: str
+    dialogueDensity: Literal["少量", "均衡", "密集"] = "均衡"
+    targetSceneCount: int = Field(default=0, ge=0, le=500)
     chapters: list[Chapter]
     characters: list[Character]
     relationships: list[Relationship]
     scenes: list[Scene]
     updatedAt: str
+    revision: int = 0
     analysisStatus: str = "pending"
     analysisMode: str = ""
     analysisError: str = ""
@@ -155,3 +159,13 @@ class ScriptValidationResponse(BaseModel):
     valid: bool
     errors: list[str]
     scene_count: int
+
+
+class ScenePolishRequest(BaseModel):
+    instruction: str = Field(min_length=1, max_length=1000)
+
+
+class ScenePolishResponse(BaseModel):
+    scene: Scene
+    mode: str
+    error: str

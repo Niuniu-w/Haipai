@@ -61,19 +61,33 @@ export interface ScriptValidationResponse {
   scene_count: number
 }
 
+export interface ScenePolishResponse {
+  scene: Scene
+  mode: string
+  error: string
+}
+
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000'
+const apiToken = import.meta.env.VITE_API_TOKEN || ''
+
+export class ApiRequestError extends Error {
+  constructor(public status: number, message: string) {
+    super(message)
+  }
+}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${apiBaseUrl}${path}`, {
     ...init,
     headers: {
       Accept: 'application/json',
+      ...(apiToken ? { Authorization: `Bearer ${apiToken}` } : {}),
       ...(init?.body ? { 'Content-Type': 'application/json' } : {}),
       ...init?.headers,
     },
   })
 
-  if (!response.ok) throw new Error(`项目接口请求失败：${response.status}`)
+  if (!response.ok) throw new ApiRequestError(response.status, `项目接口请求失败：${response.status}`)
   if (response.status === 204) return undefined as T
   return (await response.json()) as T
 }
@@ -93,9 +107,10 @@ export async function getProject(projectId: string): Promise<ProjectResponse> {
   return request<ProjectResponse>(`/api/projects/${projectId}`)
 }
 
-export async function updateProject(projectId: string, project: Project): Promise<ProjectResponse> {
+export async function updateProject(projectId: string, project: Project, expectedRevision = ''): Promise<ProjectResponse> {
   return request<ProjectResponse>(`/api/projects/${projectId}`, {
     method: 'PUT',
+    headers: expectedRevision ? { 'If-Match': expectedRevision } : undefined,
     body: JSON.stringify(project),
   })
 }
@@ -131,13 +146,27 @@ export async function getProjectGenerationStatus(projectId: string): Promise<Gen
   return request<GenerationStatusResponse>(`/api/projects/${projectId}/generation-status`)
 }
 
+export async function polishProjectScene(projectId: string, sceneId: string, instruction: string): Promise<ScenePolishResponse> {
+  return request<ScenePolishResponse>(`/api/projects/${projectId}/scenes/${encodeURIComponent(sceneId)}/polish`, {
+    method: 'POST',
+    body: JSON.stringify({ instruction }),
+  })
+}
+
 export async function validateProjectYaml(projectId: string): Promise<ScriptValidationResponse> {
   return request<ScriptValidationResponse>(`/api/projects/${projectId}/validate-script`)
 }
 
+export async function getScriptSchema(): Promise<Record<string, unknown>> {
+  return request<Record<string, unknown>>('/api/projects/script-schema')
+}
+
 export async function exportProjectYaml(projectId: string): Promise<string> {
   const response = await fetch(`${apiBaseUrl}/api/projects/${projectId}/export/yaml`, {
-    headers: { Accept: 'application/yaml' },
+    headers: {
+      Accept: 'application/yaml',
+      ...(apiToken ? { Authorization: `Bearer ${apiToken}` } : {}),
+    },
   })
   if (!response.ok) throw new Error(`YAML 导出失败：${response.status}`)
   return response.text()
