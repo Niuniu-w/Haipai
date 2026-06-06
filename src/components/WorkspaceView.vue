@@ -32,11 +32,16 @@ const rightTab = ref<'yaml' | 'source'>('yaml')
 const polishOpen = ref(false)
 const polishInstruction = ref('减少旁白，增加对白，让冲突更强烈')
 const isExporting = ref(false)
+const characterPickerOpen = ref(false)
+const scenePendingDelete = ref<Scene | null>(null)
 
 const activeScene = computed(() => props.project.scenes.find((scene) => scene.id === activeId.value) ?? props.project.scenes[0])
 const yamlText = computed(() => projectToYaml(props.project))
 const validationErrors = computed(() => validateProjectScript(props.project))
 const validationPassed = computed(() => validationErrors.value.length === 0)
+const availableSceneCharacters = computed(() =>
+  props.project.characters.filter((character) => !activeScene.value?.characters.includes(character.name)),
+)
 const groupedScenes = computed(() =>
   props.project.chapters.map((chapter) => ({
     chapter,
@@ -55,6 +60,36 @@ function addDialogue() {
     emotion: '平静',
     line: '输入人物对白…',
   })
+}
+
+function addSceneCharacter(name: string) {
+  if (!activeScene.value || activeScene.value.characters.includes(name)) return
+  activeScene.value.characters.push(name)
+  characterPickerOpen.value = false
+  emit('notify', `已添加出场人物：${name}`)
+}
+
+function removeSceneCharacter(name: string) {
+  if (activeScene.value.dialogues.some((dialogue) => dialogue.character === name)) {
+    emit('notify', `“${name}”仍有对白，请先调整或删除相关对白`)
+    return
+  }
+  activeScene.value.characters = activeScene.value.characters.filter((character) => character !== name)
+}
+
+function toggleCharacterPicker() {
+  if (!availableSceneCharacters.value.length) {
+    emit('notify', props.project.characters.length ? '人物表中的人物都已在本场出场' : '请先在故事分析页添加人物')
+    return
+  }
+  characterPickerOpen.value = !characterPickerOpen.value
+}
+
+function moveDialogue(index: number, direction: number) {
+  const target = index + direction
+  if (target < 0 || target >= activeScene.value.dialogues.length) return
+  const [dialogue] = activeScene.value.dialogues.splice(index, 1)
+  activeScene.value.dialogues.splice(target, 0, dialogue)
 }
 
 function addScene() {
@@ -77,11 +112,22 @@ function addScene() {
   emit('notify', '已添加新场景')
 }
 
-function removeScene() {
-  if (props.project.scenes.length <= 1) return
-  const index = props.project.scenes.findIndex((scene) => scene.id === activeId.value)
+function requestRemoveScene() {
+  if (props.project.scenes.length <= 1) {
+    emit('notify', '项目至少需要保留一个场景')
+    return
+  }
+  scenePendingDelete.value = activeScene.value
+}
+
+function confirmRemoveScene() {
+  if (!scenePendingDelete.value) return
+  const index = props.project.scenes.findIndex((scene) => scene.id === scenePendingDelete.value?.id)
+  if (index < 0) return
   props.project.scenes.splice(index, 1)
   activeId.value = props.project.scenes[Math.max(0, index - 1)].id
+  scenePendingDelete.value = null
+  emit('notify', '场景已删除')
 }
 
 function copyYaml() {
@@ -173,7 +219,7 @@ function moveScene(direction: number) {
           <div>
             <button class="icon-button" title="上移" @click="moveScene(-1)"><ArrowUp :size="15" /></button>
             <button class="icon-button" title="下移" @click="moveScene(1)"><ArrowDown :size="15" /></button>
-            <button class="icon-button danger" title="删除场景" @click="removeScene"><Trash2 :size="15" /></button>
+            <button class="icon-button danger" title="删除场景" @click="requestRemoveScene"><Trash2 :size="15" /></button>
             <button class="button magic small" @click="polishOpen = true"><Sparkles :size="15" /> AI 润色</button>
           </div>
         </div>
@@ -187,8 +233,15 @@ function moveScene(direction: number) {
           </div>
 
           <div class="editor-section">
-            <div class="editor-section-title"><span>出场人物</span><button><Plus :size="13" /> 添加</button></div>
-            <div class="character-tags"><span v-for="name in activeScene.characters" :key="name">{{ name }}<X :size="11" /></span></div>
+            <div class="editor-section-title"><span>出场人物</span><button @click="toggleCharacterPicker"><Plus :size="13" /> 添加</button></div>
+            <div v-if="characterPickerOpen" class="character-picker">
+              <button v-for="character in availableSceneCharacters" :key="character.id" @click="addSceneCharacter(character.name)">
+                {{ character.name }} · {{ character.role }}
+              </button>
+            </div>
+            <div class="character-tags">
+              <span v-for="name in activeScene.characters" :key="name">{{ name }}<button :title="`移除 ${name}`" @click="removeSceneCharacter(name)"><X :size="11" /></button></span>
+            </div>
           </div>
 
           <div class="editor-section">
@@ -205,7 +258,10 @@ function moveScene(direction: number) {
             <div class="editor-section-title"><span>人物对白</span><button @click="addDialogue"><Plus :size="13" /> 添加对白</button></div>
             <div class="dialogue-list">
               <div v-for="(dialogue, index) in activeScene.dialogues" :key="dialogue.id" class="dialogue-row">
-                <GripVertical :size="15" />
+                <div class="row-move-actions">
+                  <button title="上移对白" :disabled="index === 0" @click="moveDialogue(index, -1)"><ArrowUp :size="12" /></button>
+                  <button title="下移对白" :disabled="index === activeScene.dialogues.length - 1" @click="moveDialogue(index, 1)"><ArrowDown :size="12" /></button>
+                </div>
                 <div class="dialogue-fields">
                   <div><input v-model="dialogue.character" class="speaker" /><input v-model="dialogue.emotion" class="emotion" /></div>
                   <textarea v-model="dialogue.line" rows="2"></textarea>
@@ -250,6 +306,20 @@ function moveScene(direction: number) {
           <textarea v-model="polishInstruction" rows="4"></textarea>
           <div class="prompt-chips"><button @click="polishInstruction = '让冲突更强烈'">冲突更强烈</button><button @click="polishInstruction = '减少旁白，增加对白'">增加对白</button><button @click="polishInstruction = '保持剧情不变，改成夜晚'">改成夜晚</button></div>
           <button class="button primary full" @click="applyPolish"><Sparkles :size="15" /> 应用 AI 润色</button>
+        </div>
+      </div>
+    </Transition>
+
+    <Transition name="modal">
+      <div v-if="scenePendingDelete" class="modal-backdrop" @click.self="scenePendingDelete = null">
+        <div class="confirm-modal">
+          <div class="confirm-icon"><Trash2 :size="18" /></div>
+          <h3>删除场景“{{ scenePendingDelete.title }}”？</h3>
+          <p>该场景中的动作、对白和编辑内容都会被删除，此操作无法撤销。</p>
+          <div class="confirm-actions">
+            <button class="button ghost" @click="scenePendingDelete = null">取消</button>
+            <button class="button danger-fill" @click="confirmRemoveScene">确认删除</button>
+          </div>
         </div>
       </div>
     </Transition>

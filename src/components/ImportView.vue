@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { ArrowRight, BookOpen, CheckCircle2, FileText, LoaderCircle, Pencil, UploadCloud } from 'lucide-vue-next'
+import { ArrowRight, BookOpen, CheckCircle2, FileText, LoaderCircle, Merge, Pencil, Scissors, UploadCloud } from 'lucide-vue-next'
 import { parseProjectChapters } from '../api/projects'
 import type { Project } from '../types'
 import { parseChapters } from '../utils'
@@ -11,11 +11,85 @@ const isDragging = ref(false)
 const isParsing = ref(false)
 const selectedChapter = ref(0)
 const parseSource = ref<'backend' | 'local' | ''>('')
+const chapterContentEditor = ref<HTMLTextAreaElement | null>(null)
 
 const wordCount = computed(() => props.project.rawText.replace(/\s/g, '').length)
 const valid = computed(() => props.project.chapters.length >= 3)
 const supportedExtensions = ['txt', 'md', 'docx']
 type FileEncoding = 'UTF-8' | 'GB18030' | 'UTF-16LE' | 'UTF-16BE' | 'DOCX'
+
+function chapterMetadata(content: string) {
+  const sentences = content.split(/[。！？](?:[”’」』])?|\n/).map((sentence) => sentence.trim()).filter(Boolean)
+  return {
+    summary: sentences.slice(0, 2).join('。').slice(0, 120),
+    keyEvents: sentences.slice(0, 3),
+  }
+}
+
+function refreshChapterMetadata(index: number) {
+  const chapter = props.project.chapters[index]
+  if (!chapter) return
+  Object.assign(chapter, chapterMetadata(chapter.content))
+}
+
+function syncChapterTitle(chapterId: string, title: string) {
+  props.project.scenes
+    .filter((scene) => scene.chapterId === chapterId)
+    .forEach((scene) => {
+      scene.sourceChapter = title
+    })
+}
+
+function splitChapter() {
+  const chapter = props.project.chapters[selectedChapter.value]
+  const position = chapterContentEditor.value?.selectionStart ?? 0
+  if (!chapter || position <= 0 || position >= chapter.content.length) {
+    emit('notify', '请先把光标放在章节正文中需要拆分的位置')
+    return
+  }
+
+  const firstContent = chapter.content.slice(0, position).trim()
+  const secondContent = chapter.content.slice(position).trim()
+  if (!firstContent || !secondContent) {
+    emit('notify', '拆分位置前后都需要保留正文内容')
+    return
+  }
+
+  chapter.content = firstContent
+  Object.assign(chapter, chapterMetadata(firstContent))
+  props.project.chapters.splice(selectedChapter.value + 1, 0, {
+    id: `chapter-${Date.now()}`,
+    title: `${chapter.title}（下）`,
+    content: secondContent,
+    ...chapterMetadata(secondContent),
+  })
+  selectedChapter.value += 1
+  parseSource.value = ''
+  emit('notify', '已按光标位置拆分章节')
+}
+
+function mergeNextChapter() {
+  const chapter = props.project.chapters[selectedChapter.value]
+  const nextChapter = props.project.chapters[selectedChapter.value + 1]
+  if (!chapter || !nextChapter) {
+    emit('notify', '当前章节后面没有可合并的章节')
+    return
+  }
+
+  chapter.content = `${chapter.content.trim()}\n\n${nextChapter.content.trim()}`.trim()
+  Object.assign(chapter, chapterMetadata(chapter.content))
+  props.project.chapters.splice(selectedChapter.value + 1, 1)
+  props.project.scenes
+    .filter((scene) => scene.chapterId === nextChapter.id)
+    .forEach((scene) => {
+      scene.chapterId = chapter.id
+      scene.sourceChapter = chapter.title
+      scene.sourceSummary = chapter.summary
+    })
+  props.project.generationChapters = props.project.generationChapters.filter((state) => state.chapter_id !== nextChapter.id)
+  parseSource.value = ''
+  emit('notify', `已将“${nextChapter.title}”合并到当前章节`)
+}
 
 async function detect() {
   if (isParsing.value) return
@@ -205,7 +279,7 @@ async function handleFile(file?: File) {
             @click="selectedChapter = index"
           >
             <span class="chapter-number">{{ String(index + 1).padStart(2, '0') }}</span>
-            <span class="chapter-info"><input v-model="chapter.title" @click.stop /><small>{{ chapter.content.length }} 字 · 已识别</small></span>
+            <span class="chapter-info"><input v-model="chapter.title" @click.stop @input="syncChapterTitle(chapter.id, chapter.title)" /><small>{{ chapter.content.length }} 字 · 已识别</small></span>
             <Pencil :size="14" />
           </button>
           <div v-if="!project.chapters.length" class="empty-state">
@@ -214,9 +288,21 @@ async function handleFile(file?: File) {
             <span>章节标题可使用“第一章”或“Chapter 1”等格式</span>
           </div>
         </div>
-        <div v-if="project.chapters[selectedChapter]" class="chapter-preview">
-          <span>章节开头预览</span>
-          <p>{{ project.chapters[selectedChapter].content.slice(0, 125) }}…</p>
+        <div v-if="project.chapters[selectedChapter]" class="chapter-preview chapter-boundary-editor">
+          <div class="chapter-boundary-head">
+            <span>章节正文与划分</span>
+            <div>
+              <button title="在正文光标位置拆分为两章" @click="splitChapter"><Scissors :size="13" /> 按光标拆分</button>
+              <button :disabled="selectedChapter === project.chapters.length - 1" title="把下一章正文合并到当前章" @click="mergeNextChapter"><Merge :size="13" /> 合并下一章</button>
+            </div>
+          </div>
+          <textarea
+            ref="chapterContentEditor"
+            v-model="project.chapters[selectedChapter].content"
+            rows="8"
+            @blur="refreshChapterMetadata(selectedChapter)"
+          ></textarea>
+          <small>可直接编辑正文，或把光标放在新的章节边界后点击“按光标拆分”。</small>
         </div>
       </div>
     </div>

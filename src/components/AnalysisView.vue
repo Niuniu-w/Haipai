@@ -19,6 +19,19 @@ const scriptTypes = ['电影', '电视剧', '短剧']
 const hasAnalysis = computed(() => Boolean(props.project.summary || props.project.characters.length || props.project.relationships.length))
 const relationCore = computed(() => props.project.relationships[0]?.from ?? props.project.characters[0]?.name ?? '')
 const canAnalyze = computed(() => props.backendConnected && Boolean(props.projectId) && props.project.chapters.length >= 3)
+const characterColors = ['#bd6c55', '#6f8674', '#7c7894', '#b08968', '#617c8b', '#9a6d78']
+
+function addCharacter() {
+  const number = props.project.characters.length + 1
+  props.project.characters.push({
+    id: `character-${Date.now()}`,
+    name: `新人物 ${number}`,
+    role: '待定角色',
+    description: '补充人物简介',
+    color: characterColors[(number - 1) % characterColors.length],
+  })
+  emit('notify', '已添加人物，可直接编辑人物信息')
+}
 
 async function runAnalysis() {
   if (!canAnalyze.value || isAnalyzing.value) {
@@ -103,12 +116,16 @@ async function runAnalysis() {
         <div class="panel">
           <div class="panel-title">
             <div><UserRound :size="17" /><b>主要人物</b><span class="count-pill">{{ project.characters.length }}</span></div>
-            <button class="text-button"><Plus :size="14" /> 添加人物</button>
+            <button class="text-button" @click="addCharacter"><Plus :size="14" /> 添加人物</button>
           </div>
           <div class="character-grid">
             <article v-for="character in project.characters" :key="character.id" class="character-card">
               <div class="character-avatar" :style="{ background: character.color }">{{ character.name.slice(0, 1) }}</div>
-              <div><h4>{{ character.name }}</h4><span>{{ character.role }}</span><p>{{ character.description }}</p></div>
+              <div class="character-fields">
+                <input v-model="character.name" class="character-name" aria-label="人物名称" />
+                <input v-model="character.role" class="character-role" aria-label="人物角色" />
+                <textarea v-model="character.description" rows="2" aria-label="人物简介"></textarea>
+              </div>
             </article>
           </div>
         </div>
