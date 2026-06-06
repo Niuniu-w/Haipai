@@ -6,6 +6,7 @@ import {
   ArrowUp,
   CheckCircle2,
   ChevronDown,
+  CircleAlert,
   Clipboard,
   Download,
   FileCode2,
@@ -20,18 +21,22 @@ import {
   Trash2,
   X,
 } from 'lucide-vue-next'
+import { exportProjectYaml, updateProject, validateProjectYaml } from '../api/projects'
 import type { Project, Scene } from '../types'
-import { downloadText, projectToYaml } from '../utils'
+import { downloadText, projectToYaml, validateProjectScript } from '../utils'
 
-const props = defineProps<{ project: Project }>()
+const props = defineProps<{ project: Project; projectId: string; backendConnected: boolean }>()
 const emit = defineEmits<{ back: []; notify: [message: string]; save: [] }>()
 const activeId = ref(props.project.scenes[0]?.id ?? '')
 const rightTab = ref<'yaml' | 'source'>('yaml')
 const polishOpen = ref(false)
 const polishInstruction = ref('减少旁白，增加对白，让冲突更强烈')
+const isExporting = ref(false)
 
 const activeScene = computed(() => props.project.scenes.find((scene) => scene.id === activeId.value) ?? props.project.scenes[0])
 const yamlText = computed(() => projectToYaml(props.project))
+const validationErrors = computed(() => validateProjectScript(props.project))
+const validationPassed = computed(() => validationErrors.value.length === 0)
 const groupedScenes = computed(() =>
   props.project.chapters.map((chapter) => ({
     chapter,
@@ -80,13 +85,39 @@ function removeScene() {
 }
 
 function copyYaml() {
+  if (!validationPassed.value) {
+    emit('notify', `结构校验失败：${validationErrors.value[0]}`)
+    return
+  }
   navigator.clipboard.writeText(yamlText.value)
   emit('notify', '完整 YAML 已复制')
 }
 
-function downloadYaml() {
-  downloadText(`${props.project.title}.yaml`, yamlText.value)
-  emit('notify', 'YAML 文件已导出')
+async function downloadYaml() {
+  if (!validationPassed.value) {
+    emit('notify', `结构校验失败：${validationErrors.value[0]}`)
+    return
+  }
+  isExporting.value = true
+  try {
+    if (props.backendConnected && props.projectId) {
+      await updateProject(props.projectId, JSON.parse(JSON.stringify(props.project)) as Project)
+      const validation = await validateProjectYaml(props.projectId)
+      if (!validation.valid) {
+        emit('notify', `服务端校验失败：${validation.errors[0]}`)
+        return
+      }
+      downloadText(`${props.project.title}.yaml`, await exportProjectYaml(props.projectId))
+      emit('notify', '服务端校验通过，YAML 已导出')
+    } else {
+      downloadText(`${props.project.title}.yaml`, yamlText.value)
+      emit('notify', '本地结构校验通过，YAML 已导出')
+    }
+  } catch {
+    emit('notify', '服务端 YAML 导出失败，请检查后端连接')
+  } finally {
+    isExporting.value = false
+  }
 }
 
 function applyPolish() {
@@ -115,8 +146,8 @@ function moveScene(direction: number) {
       </div>
       <div class="toolbar-actions">
         <button class="button ghost small" @click="emit('save')"><Save :size="15" /> 保存</button>
-        <button class="button ghost small" @click="copyYaml"><Clipboard :size="15" /> 复制 YAML</button>
-        <button class="button primary small" @click="downloadYaml"><Download :size="15" /> 导出剧本</button>
+        <button class="button ghost small" :disabled="!validationPassed" @click="copyYaml"><Clipboard :size="15" /> 复制 YAML</button>
+        <button class="button primary small" :disabled="isExporting || !validationPassed" @click="downloadYaml"><Download :size="15" /> {{ isExporting ? '校验导出中…' : '导出剧本' }}</button>
       </div>
     </div>
 
@@ -196,10 +227,15 @@ function moveScene(direction: number) {
           <button :class="{ active: rightTab === 'yaml' }" @click="rightTab = 'yaml'"><FileCode2 :size="14" /> YAML 预览</button>
           <button :class="{ active: rightTab === 'source' }" @click="rightTab = 'source'"><MessageSquareText :size="14" /> 原文对照</button>
         </div>
-        <div class="validation"><CheckCircle2 :size="14" /><span>结构校验通过</span><small>{{ project.scenes.length }} 场</small></div>
+        <div class="validation" :class="{ invalid: !validationPassed }" :title="validationErrors.join('\n')">
+          <CheckCircle2 v-if="validationPassed" :size="14" />
+          <CircleAlert v-else :size="14" />
+          <span>{{ validationPassed ? '结构校验通过' : `结构校验失败：${validationErrors[0]}` }}</span>
+          <small>{{ validationPassed ? `${project.scenes.length} 场` : `${validationErrors.length} 项` }}</small>
+        </div>
         <pre v-if="rightTab === 'yaml'" class="yaml-preview">{{ yamlText }}</pre>
         <div v-else class="source-preview"><span>{{ activeScene.sourceChapter }}</span><p>{{ project.chapters.find((chapter) => chapter.id === activeScene.chapterId)?.content }}</p></div>
-        <div class="preview-footer"><span>YAML · UTF-8</span><button @click="copyYaml"><Clipboard :size="13" /> 复制</button></div>
+        <div class="preview-footer"><span>YAML · UTF-8</span><button :disabled="!validationPassed" @click="copyYaml"><Clipboard :size="13" /> 复制</button></div>
       </aside>
     </div>
 

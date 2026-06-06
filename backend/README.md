@@ -40,6 +40,8 @@ POST   /api/projects/{id}/generate        生成并保存结构化剧本场景
 POST   /api/projects/{id}/generation/start  初始化逐章生成任务
 POST   /api/projects/{id}/chapters/{chapter_id}/generate  生成或重新生成单章
 GET    /api/projects/{id}/generation-status  查询剧本生成状态
+GET    /api/projects/{id}/validate-script    校验剧本导出结构
+GET    /api/projects/{id}/export/yaml        校验并导出 YAML
 ```
 
 项目默认保存在 `backend/storyforge.db`。这是本地运行数据，已加入 `.gitignore`。
@@ -65,6 +67,8 @@ STORYFORGE_LLM_MODEL=gpt-5-mini
 重新启动后端后，`POST /api/projects/{id}/analyze` 会优先使用 OpenAI Responses API，并通过 JSON Schema 和 Pydantic 校验结构化结果。未配置密钥、模型请求失败或结果校验失败时，会自动回退本地规则分析。
 
 同一模型配置也用于剧本生成。前端先初始化逐章任务，再按章节逐个调用生成接口；每章完成后会立即保存场景和章节状态到 SQLite。失败章节与已完成章节都可以单独重新生成，不会重新调用其他章节。未配置密钥或模型调用失败时自动使用后端本地规则生成。
+
+YAML 导出接口会校验作品标题、场景必填字段、唯一场景编号、来源章节、动作描述、出场人物和对白人物关系。结构无效时返回 `422` 和具体错误列表，校验通过后才返回 UTF-8 YAML 文件。
 
 `backend/.env` 已加入 `.gitignore`，不得提交 API Key。
 

@@ -1,4 +1,5 @@
 import pytest
+import yaml
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
@@ -369,3 +370,67 @@ async def test_failed_chapter_can_retry_without_regenerating_other_chapters(
     assert [
         scene for scene in retry_response.json()["scenes"] if scene["chapterId"] == "chapter-1"
     ] == first_chapter_scenes
+
+
+@pytest.mark.anyio
+async def test_validate_and_export_yaml(client: AsyncClient, project_data: dict) -> None:
+    raw_text = """第一章 开始
+林墨走进咖啡馆。
+
+第二章 继续
+苏禾在档案室找到线索。
+
+第三章 结尾
+陈望在桥下说出真相。"""
+    project_id = (await client.post("/api/projects", json=project_data)).json()["id"]
+    await client.post(f"/api/projects/{project_id}/parse-chapters", json={"raw_text": raw_text})
+    await client.post(f"/api/projects/{project_id}/analyze")
+    await client.post(f"/api/projects/{project_id}/generate")
+
+    validation_response = await client.get(f"/api/projects/{project_id}/validate-script")
+    assert validation_response.status_code == 200
+    assert validation_response.json() == {"valid": True, "errors": [], "scene_count": 3}
+
+    export_response = await client.get(f"/api/projects/{project_id}/export/yaml")
+    assert export_response.status_code == 200
+    assert export_response.headers["content-type"].startswith("application/yaml")
+    exported = yaml.safe_load(export_response.text)
+    assert exported["title"] == "测试故事"
+    assert len(exported["scenes"]) == 3
+    assert exported["scenes"][0]["source_chapter"] == "第一章 开始"
+
+
+@pytest.mark.anyio
+async def test_invalid_script_cannot_export_yaml(client: AsyncClient, project_data: dict) -> None:
+    invalid_scene = {
+        "id": "SC-01",
+        "chapterId": "missing-chapter",
+        "sourceChapter": "不存在的章节",
+        "title": "",
+        "location": "",
+        "time": "",
+        "atmosphere": "",
+        "characters": ["不存在的人物"],
+        "actions": [],
+        "dialogues": [
+            {
+                "id": "dialogue-1",
+                "character": "对白人物",
+                "emotion": "",
+                "line": "",
+            }
+        ],
+        "sourceSummary": "",
+    }
+    project_id = (
+        await client.post("/api/projects", json={**project_data, "scenes": [invalid_scene]})
+    ).json()["id"]
+
+    validation_response = await client.get(f"/api/projects/{project_id}/validate-script")
+    assert validation_response.status_code == 200
+    assert validation_response.json()["valid"] is False
+    assert "SC-01：来源章节不存在" in validation_response.json()["errors"]
+
+    export_response = await client.get(f"/api/projects/{project_id}/export/yaml")
+    assert export_response.status_code == 422
+    assert export_response.json()["detail"]["message"] == "剧本结构校验失败"

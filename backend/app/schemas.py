@@ -149,3 +149,9 @@ class GenerationStatusResponse(BaseModel):
     error: str
     scene_count: int
     chapter_statuses: list[GenerationChapterState]
+
+
+class ScriptValidationResponse(BaseModel):
+    valid: bool
+    errors: list[str]
+    scene_count: int

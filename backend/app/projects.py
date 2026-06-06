@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from urllib.parse import quote
 
 from .chapter_parser import parse_chapters
 from .database import get_db
@@ -20,8 +21,10 @@ from .schemas import (
     ProjectSummary,
     Scene,
     ScriptGenerationResponse,
+    ScriptValidationResponse,
     StoryAnalysisResponse,
 )
+from .yaml_export import dump_project_yaml, validate_project_script
 
 router = APIRouter(prefix="/api/projects", tags=["项目"])
 
@@ -368,6 +371,27 @@ def generate_project_chapter(
 @router.get("/{project_id}/generation-status", response_model=GenerationStatusResponse)
 def get_generation_status(project_id: str, db: Session = Depends(get_db)) -> GenerationStatusResponse:
     return generation_status_response(get_project_or_404(project_id, db))
+
+
+@router.get("/{project_id}/validate-script", response_model=ScriptValidationResponse)
+def validate_project_yaml(project_id: str, db: Session = Depends(get_db)) -> ScriptValidationResponse:
+    data = ProjectData.model_validate(get_project_or_404(project_id, db).data)
+    errors = validate_project_script(data)
+    return ScriptValidationResponse(valid=not errors, errors=errors, scene_count=len(data.scenes))
+
+
+@router.get("/{project_id}/export/yaml")
+def export_project_yaml(project_id: str, db: Session = Depends(get_db)) -> Response:
+    data = ProjectData.model_validate(get_project_or_404(project_id, db).data)
+    errors = validate_project_script(data)
+    if errors:
+        raise HTTPException(status_code=422, detail={"message": "剧本结构校验失败", "errors": errors})
+    filename = "".join(character if character not in r'\/:*?"<>|' else "_" for character in data.title) or "storyforge"
+    return Response(
+        content=dump_project_yaml(data),
+        media_type="application/yaml; charset=utf-8",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}.yaml"},
+    )
 
 
 @router.get("/{project_id}", response_model=ProjectResponse)

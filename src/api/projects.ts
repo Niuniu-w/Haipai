@@ -55,6 +55,12 @@ export interface GenerationStatusResponse {
   chapter_statuses: GenerationChapterState[]
 }
 
+export interface ScriptValidationResponse {
+  valid: boolean
+  errors: string[]
+  scene_count: number
+}
+
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000'
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -123,4 +129,16 @@ export async function generateProjectChapter(projectId: string, chapterId: strin
 
 export async function getProjectGenerationStatus(projectId: string): Promise<GenerationStatusResponse> {
   return request<GenerationStatusResponse>(`/api/projects/${projectId}/generation-status`)
+}
+
+export async function validateProjectYaml(projectId: string): Promise<ScriptValidationResponse> {
+  return request<ScriptValidationResponse>(`/api/projects/${projectId}/validate-script`)
+}
+
+export async function exportProjectYaml(projectId: string): Promise<string> {
+  const response = await fetch(`${apiBaseUrl}/api/projects/${projectId}/export/yaml`, {
+    headers: { Accept: 'application/yaml' },
+  })
+  if (!response.ok) throw new Error(`YAML 导出失败：${response.status}`)
+  return response.text()
 }
