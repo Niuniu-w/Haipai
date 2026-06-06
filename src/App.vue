@@ -342,7 +342,15 @@ onBeforeUnmount(() => {
         @next="view = 'workspace'"
         @notify="notify"
       />
-      <WorkspaceView v-else :project="project" @back="view = 'generate'" @notify="notify" @save="saveNow" />
+      <WorkspaceView
+        v-else
+        :project="project"
+        :project-id="remoteProjectId"
+        :backend-connected="backendStatus === 'connected'"
+        @back="view = 'generate'"
+        @notify="notify"
+        @save="saveNow"
+      />
     </main>
 
     <Transition name="toast">
