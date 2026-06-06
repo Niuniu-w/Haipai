@@ -84,6 +84,8 @@ def test_model_script_generation_validates_and_converts_scenes() -> None:
         "电影",
         chapters,
         characters,
+        dialogue_density="密集",
+        target_scene_count=2,
         settings=settings,
         client=client,
     )
@@ -92,6 +94,8 @@ def test_model_script_generation_validates_and_converts_scenes() -> None:
     assert scenes[0].sourceChapter == "第一章 雨夜"
     assert scenes[0].dialogues[0].id == "dialogue-1-1"
     assert client.request_json["text"]["format"]["type"] == "json_schema"
+    assert "对白密度：密集" in client.request_json["input"]
+    assert "目标场景数：2" in client.request_json["input"]
 
 
 def test_model_script_failure_falls_back_to_local_rules(monkeypatch) -> None:

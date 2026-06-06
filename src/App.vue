@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { Check, Cloud, Feather, LayoutDashboard, Server, Sparkles } from 'lucide-vue-next'
 import { checkBackendHealth, getAIStatus, type AIStatus, type BackendStatus } from './api/health'
 import {
@@ -8,6 +8,7 @@ import {
   getProject,
   listProjects,
   updateProject,
+  ApiRequestError,
   type ProjectSummary,
 } from './api/projects'
 import HomeView from './components/HomeView.vue'
@@ -19,9 +20,25 @@ import { defaultProject, sampleNovel } from './data'
 import type { Project, ViewName } from './types'
 import { parseChapters } from './utils'
 
-const stored = localStorage.getItem('storyforge-project')
-const project = reactive<Project>(stored ? JSON.parse(stored) : structuredClone(defaultProject))
+const LOCAL_PROJECT_KEY = 'storyforge-project'
+const LOCAL_UPDATED_KEY = 'storyforge-project-local-updated-at'
+const stored = localStorage.getItem(LOCAL_PROJECT_KEY)
+let initialProject = structuredClone(defaultProject)
+if (stored) {
+  try {
+    initialProject = JSON.parse(stored) as Project
+  } catch {
+    localStorage.removeItem(LOCAL_PROJECT_KEY)
+  }
+}
+const project = reactive<Project>(initialProject)
 if (!project.chapters.length) project.chapters = parseChapters(project.rawText)
+if (!Number.isFinite(Date.parse(project.updatedAt))) {
+  const storedUpdatedAt = localStorage.getItem(LOCAL_UPDATED_KEY)
+  project.updatedAt = storedUpdatedAt && Number.isFinite(Date.parse(storedUpdatedAt))
+    ? storedUpdatedAt
+    : new Date(0).toISOString()
+}
 project.analysisStatus ??= 'pending'
 project.analysisMode ??= ''
 project.analysisError ??= ''
@@ -31,7 +48,12 @@ project.generationMode ??= project.scenes.length ? 'legacy-local' : ''
 project.generationError ??= ''
 project.generationAttempts ??= 0
 project.generationChapters ??= []
+project.revision ??= 0
+project.dialogueDensity ??= '均衡'
+project.targetSceneCount ??= Math.max(project.chapters.length, 1)
 const remoteProjectId = ref(localStorage.getItem('storyforge-project-id') ?? '')
+const storedRevision = localStorage.getItem('storyforge-project-revision') ?? ''
+const remoteRevision = ref(/^\d+$/.test(storedRevision) ? storedRevision : '')
 const projectHistory = ref<ProjectSummary[]>([])
 
 const view = ref<ViewName>('home')
@@ -44,6 +66,12 @@ let toastTimer: number | undefined
 let saveTimer: number | undefined
 let remoteSaveTimer: number | undefined
 let healthTimer: number | undefined
+let applyingProject = false
+let touchingUpdatedAt = false
+let changeVersion = 0
+let projectContextVersion = 0
+let backendSaveQueue: Promise<void> = Promise.resolve()
+let lastConflictVersion = -1
 
 const steps: { id: ViewName; label: string }[] = [
   { id: 'import', label: '导入原著' },
@@ -67,12 +95,20 @@ const saveLabel = computed(() => {
 watch(
   project,
   () => {
+    if (applyingProject) return
+    changeVersion += 1
+    if (!touchingUpdatedAt) {
+      touchingUpdatedAt = true
+      project.updatedAt = new Date().toISOString()
+      queueMicrotask(() => (touchingUpdatedAt = false))
+    }
     saved.value = false
     remoteSaved.value = false
     window.clearTimeout(saveTimer)
     window.clearTimeout(remoteSaveTimer)
     saveTimer = window.setTimeout(() => {
-      localStorage.setItem('storyforge-project', JSON.stringify(project))
+      localStorage.setItem(LOCAL_PROJECT_KEY, JSON.stringify(project))
+      localStorage.setItem(LOCAL_UPDATED_KEY, project.updatedAt)
       saved.value = true
     }, 450)
     remoteSaveTimer = window.setTimeout(() => saveProjectToBackend(), 900)
@@ -119,42 +155,68 @@ async function saveProjectToBackend(showResult = false) {
     backendStatus.value !== 'connected'
     || project.analysisStatus === 'running'
     || project.generationStatus === 'running'
-  ) return
+  ) return Promise.resolve(false)
 
-  try {
-    const snapshot = JSON.parse(JSON.stringify(project)) as Project
-    const response = remoteProjectId.value
-      ? await updateProject(remoteProjectId.value, snapshot)
-      : await createProject(snapshot)
-    remoteProjectId.value = response.id
-    localStorage.setItem('storyforge-project-id', response.id)
-    remoteSaved.value = true
-    saved.value = true
-    await refreshProjectHistory()
-    if (showResult) notify('项目已保存到后端')
-  } catch {
-    remoteSaved.value = false
-    if (showResult) notify('后端保存失败，项目仍保存在浏览器')
-  }
+  const snapshot = JSON.parse(JSON.stringify(project)) as Project
+  const requestedVersion = changeVersion
+  const requestedContext = projectContextVersion
+  const operation = backendSaveQueue.then(async () => {
+    if (backendStatus.value !== 'connected' || requestedContext !== projectContextVersion) return false
+    const targetProjectId = remoteProjectId.value
+    const targetRevision = remoteRevision.value
+    try {
+      const response = targetProjectId
+        ? await updateProject(targetProjectId, snapshot, targetRevision)
+        : await createProject(snapshot)
+      if (requestedContext !== projectContextVersion) return false
+      remoteProjectId.value = response.id
+      remoteRevision.value = String(response.data.revision)
+      localStorage.setItem('storyforge-project-id', response.id)
+      localStorage.setItem('storyforge-project-revision', remoteRevision.value)
+      remoteSaved.value = requestedVersion === changeVersion
+      await refreshProjectHistory()
+      if (showResult) notify('项目已保存到后端')
+      return true
+    } catch (error) {
+      remoteSaved.value = false
+      if (error instanceof ApiRequestError && [409, 428].includes(error.status)) {
+        if (lastConflictVersion !== changeVersion) {
+          lastConflictVersion = changeVersion
+          notify('远端项目已有更新，已保留本地内容；请重新打开远端项目后再合并修改')
+        }
+      } else if (showResult) {
+        notify('后端保存失败，项目仍保存在浏览器')
+      }
+      return false
+    }
+  })
+  backendSaveQueue = operation.then(() => undefined, () => undefined)
+  return operation
 }
 
 async function saveNow() {
-  localStorage.setItem('storyforge-project', JSON.stringify(project))
+  project.updatedAt = new Date().toISOString()
+  await nextTick()
+  window.clearTimeout(saveTimer)
+  window.clearTimeout(remoteSaveTimer)
+  localStorage.setItem(LOCAL_PROJECT_KEY, JSON.stringify(project))
+  localStorage.setItem(LOCAL_UPDATED_KEY, project.updatedAt)
   saved.value = true
   if (backendStatus.value === 'connected') {
-    await saveProjectToBackend(true)
+    return saveProjectToBackend(true)
   } else {
     notify('后端未连接，项目已保存到浏览器')
+    return true
   }
 }
 
 async function openAnalysis() {
-  await saveProjectToBackend()
+  if (backendStatus.value === 'connected' && !await saveProjectToBackend()) return
   view.value = 'analysis'
 }
 
 async function beginGeneration() {
-  await saveProjectToBackend()
+  if (backendStatus.value === 'connected' && !await saveProjectToBackend()) return
   view.value = 'generate'
 }
 
@@ -162,21 +224,31 @@ async function loadRemoteProject() {
   if (backendStatus.value !== 'connected' || !remoteProjectId.value) return
   try {
     const response = await getProject(remoteProjectId.value)
-    Object.assign(project, response.data)
-    remoteSaved.value = true
+    const localUpdatedAt = Date.parse(localStorage.getItem(LOCAL_UPDATED_KEY) ?? project.updatedAt)
+    const remoteUpdatedAt = Math.max(
+      Number.isFinite(Date.parse(response.data.updatedAt)) ? Date.parse(response.data.updatedAt) : 0,
+      Date.parse(response.updated_at),
+    )
+    if (stored && Number.isFinite(localUpdatedAt) && localUpdatedAt > remoteUpdatedAt) {
+      remoteRevision.value = String(response.data.revision)
+      localStorage.setItem('storyforge-project-revision', remoteRevision.value)
+      if (await saveProjectToBackend()) notify('检测到较新的本地修改，已同步到后端')
+    } else {
+      await applyRemoteProject(response.data, response.updated_at)
+    }
   } catch {
-    remoteProjectId.value = ''
-    localStorage.removeItem('storyforge-project-id')
+    resetRemoteProject()
   }
 }
 
 async function openRemoteProject(projectId: string) {
   try {
+    await backendSaveQueue
     const response = await getProject(projectId)
+    projectContextVersion += 1
     remoteProjectId.value = response.id
     localStorage.setItem('storyforge-project-id', response.id)
-    Object.assign(project, response.data)
-    remoteSaved.value = true
+    await applyRemoteProject(response.data, response.updated_at)
     view.value = project.scenes.length ? 'workspace' : 'import'
     notify(`已打开《${project.title}》`)
   } catch {
@@ -185,7 +257,10 @@ async function openRemoteProject(projectId: string) {
 }
 
 async function removeRemoteProject(projectId: string) {
+  const item = projectHistory.value.find((projectItem) => projectItem.id === projectId)
+  if (!window.confirm(`确认删除后端项目《${item?.title ?? '未命名项目'}》？此操作无法撤销。`)) return
   try {
+    await backendSaveQueue
     await deleteProject(projectId)
     if (remoteProjectId.value === projectId) resetRemoteProject()
     await refreshProjectHistory()
@@ -196,14 +271,32 @@ async function removeRemoteProject(projectId: string) {
 }
 
 function resetRemoteProject() {
+  projectContextVersion += 1
   remoteProjectId.value = ''
+  remoteRevision.value = ''
   remoteSaved.value = false
   localStorage.removeItem('storyforge-project-id')
+  localStorage.removeItem('storyforge-project-revision')
+}
+
+async function applyRemoteProject(data: Project, updatedAt: string) {
+  applyingProject = true
+  Object.assign(project, data)
+  project.updatedAt = updatedAt
+  remoteRevision.value = String(data.revision)
+  await nextTick()
+  applyingProject = false
+  localStorage.setItem('storyforge-project-revision', remoteRevision.value)
+  localStorage.setItem(LOCAL_PROJECT_KEY, JSON.stringify(project))
+  localStorage.setItem(LOCAL_UPDATED_KEY, project.updatedAt)
+  saved.value = true
+  remoteSaved.value = true
 }
 
 async function startDemo() {
   resetRemoteProject()
   Object.assign(project, structuredClone(defaultProject))
+  project.updatedAt = new Date().toISOString()
   project.rawText = sampleNovel
   project.chapters = parseChapters(sampleNovel)
   view.value = 'import'
@@ -224,6 +317,8 @@ async function newProject() {
     summary: '',
     adaptationMode: '忠于原著',
     scriptType: '电影',
+    dialogueDensity: '均衡',
+    targetSceneCount: 3,
     chapters: [],
     characters: [],
     relationships: [],
@@ -237,6 +332,8 @@ async function newProject() {
     generationError: '',
     generationAttempts: 0,
     generationChapters: [],
+    updatedAt: new Date().toISOString(),
+    revision: 0,
   })
   view.value = 'import'
   await saveProjectToBackend()
@@ -347,6 +444,7 @@ onBeforeUnmount(() => {
         :project="project"
         :project-id="remoteProjectId"
         :backend-connected="backendStatus === 'connected'"
+        :save-project="saveNow"
         @back="view = 'generate'"
         @notify="notify"
         @save="saveNow"

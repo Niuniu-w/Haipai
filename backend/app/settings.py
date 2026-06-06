@@ -28,3 +28,15 @@ def get_llm_settings() -> LLMSettings:
         timeout_seconds=float(os.getenv("STORYFORGE_LLM_TIMEOUT_SECONDS", "60")),
         max_input_chars=int(os.getenv("STORYFORGE_LLM_MAX_INPUT_CHARS", "60000")),
     )
+
+
+def get_cors_origins() -> list[str]:
+    return [
+        origin.strip()
+        for origin in os.getenv("STORYFORGE_CORS_ORIGINS", "").split(",")
+        if origin.strip()
+    ]
+
+
+def get_api_token() -> str:
+    return os.getenv("STORYFORGE_API_TOKEN", "").strip()

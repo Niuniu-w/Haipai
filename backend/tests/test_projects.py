@@ -34,11 +34,14 @@ def project_data() -> dict:
         "summary": "",
         "adaptationMode": "忠于原著",
         "scriptType": "电影",
+        "dialogueDensity": "均衡",
+        "targetSceneCount": 0,
         "chapters": [],
         "characters": [],
         "relationships": [],
         "scenes": [],
         "updatedAt": "刚刚",
+        "revision": 0,
         "analysisStatus": "pending",
         "analysisMode": "",
         "analysisError": "",
@@ -75,6 +78,7 @@ async def test_project_crud(client: AsyncClient, project_data: dict) -> None:
     create_response = await client.post("/api/projects", json=project_data)
     assert create_response.status_code == 201
     project_id = create_response.json()["id"]
+    revision = create_response.json()["data"]["revision"]
 
     list_response = await client.get("/api/projects")
     assert list_response.status_code == 200
@@ -85,7 +89,11 @@ async def test_project_crud(client: AsyncClient, project_data: dict) -> None:
     assert get_response.json()["data"] == project_data
 
     updated_data = {**project_data, "title": "更新后的故事"}
-    update_response = await client.put(f"/api/projects/{project_id}", json=updated_data)
+    update_response = await client.put(
+        f"/api/projects/{project_id}",
+        json=updated_data,
+        headers={"If-Match": str(revision)},
+    )
     assert update_response.status_code == 200
     assert update_response.json()["data"]["title"] == "更新后的故事"
 
@@ -129,6 +137,157 @@ The ending."""
     saved_project = (await client.get(f"/api/projects/{project_id}")).json()["data"]
     assert saved_project["rawText"] == raw_text
     assert len(saved_project["chapters"]) == 3
+
+
+@pytest.mark.anyio
+async def test_parse_chapters_invalidates_previous_analysis_and_generation(
+    client: AsyncClient,
+    project_data: dict,
+) -> None:
+    stale_project = {
+        **project_data,
+        "summary": "旧概要",
+        "genre": "旧题材",
+        "style": "旧风格",
+        "era": "旧时代",
+        "characters": [
+            {
+                "id": "char-1",
+                "name": "旧人物",
+                "role": "旧角色",
+                "description": "旧简介",
+                "color": "#000000",
+            }
+        ],
+        "relationships": [{"from": "旧人物", "to": "另一个人", "relation": "旧关系"}],
+        "scenes": [
+            {
+                "id": "SC-01",
+                "chapterId": "chapter-old",
+                "sourceChapter": "旧章节",
+                "title": "旧场景",
+                "location": "旧地点",
+                "time": "旧时间",
+                "atmosphere": "旧氛围",
+                "characters": ["旧人物"],
+                "actions": ["旧动作"],
+                "dialogues": [],
+                "sourceSummary": "旧来源摘要",
+            }
+        ],
+        "analysisStatus": "completed",
+        "analysisMode": "local-rules",
+        "analysisAttempts": 2,
+        "generationStatus": "completed",
+        "generationMode": "local-rules",
+        "generationAttempts": 3,
+        "generationChapters": [
+            {
+                "chapter_id": "chapter-old",
+                "status": "completed",
+                "mode": "local-rules",
+                "attempts": 1,
+                "error": "",
+                "scene_count": 1,
+            }
+        ],
+    }
+    project_id = (await client.post("/api/projects", json=stale_project)).json()["id"]
+
+    await client.post(
+        f"/api/projects/{project_id}/parse-chapters",
+        json={"raw_text": "第一章 新开始\n新内容。\n\n第二章 新继续\n新内容。\n\n第三章 新结尾\n新内容。"},
+    )
+
+    saved_project = (await client.get(f"/api/projects/{project_id}")).json()["data"]
+    assert saved_project["summary"] == ""
+    assert saved_project["genre"] == ""
+    assert saved_project["style"] == ""
+    assert saved_project["era"] == ""
+    assert saved_project["characters"] == []
+    assert saved_project["relationships"] == []
+    assert saved_project["analysisStatus"] == "pending"
+    assert saved_project["analysisAttempts"] == 0
+    assert saved_project["scenes"] == []
+    assert saved_project["generationStatus"] == "pending"
+    assert saved_project["generationAttempts"] == 0
+    assert saved_project["generationChapters"] == []
+
+
+@pytest.mark.anyio
+async def test_updating_chapter_source_invalidates_previous_analysis_and_generation(
+    client: AsyncClient,
+    project_data: dict,
+) -> None:
+    raw_text = """第一章 开始
+林墨走进咖啡馆。
+
+第二章 继续
+苏禾在档案室找到线索。
+
+第三章 结尾
+陈望在桥下说出真相。"""
+    project_id = (await client.post("/api/projects", json=project_data)).json()["id"]
+    await client.post(f"/api/projects/{project_id}/parse-chapters", json={"raw_text": raw_text})
+    await client.post(f"/api/projects/{project_id}/analyze")
+    await client.post(f"/api/projects/{project_id}/generate")
+    current = (await client.get(f"/api/projects/{project_id}")).json()["data"]
+    current["chapters"][0]["content"] += " 新增正文。"
+
+    response = await client.put(
+        f"/api/projects/{project_id}",
+        json=current,
+        headers={"If-Match": str(current["revision"])},
+    )
+
+    assert response.status_code == 200
+    saved_project = response.json()["data"]
+    assert saved_project["chapters"][0]["content"].endswith("新增正文。")
+    assert saved_project["summary"] == ""
+    assert saved_project["characters"] == []
+    assert saved_project["relationships"] == []
+    assert saved_project["analysisStatus"] == "pending"
+    assert saved_project["scenes"] == []
+    assert saved_project["generationStatus"] == "pending"
+    assert saved_project["generationChapters"] == []
+
+
+@pytest.mark.anyio
+async def test_updating_chapter_analysis_metadata_does_not_invalidate_results(
+    client: AsyncClient,
+    project_data: dict,
+) -> None:
+    project_id = (await client.post("/api/projects", json=project_data)).json()["id"]
+    current = (await client.get(f"/api/projects/{project_id}")).json()["data"]
+    current["summary"] = "保留概要"
+    current["chapters"] = [
+        {
+            "id": "chapter-1",
+            "title": "第一章",
+            "content": "正文",
+            "summary": "更新后的章节概要",
+            "keyEvents": ["更新后的事件"],
+        }
+    ]
+    first_update = await client.put(
+        f"/api/projects/{project_id}",
+        json=current,
+        headers={"If-Match": str(current["revision"])},
+    )
+    first_data = first_update.json()["data"]
+    first_data["summary"] = "分析完成概要"
+    first_data["analysisStatus"] = "completed"
+    first_data["chapters"][0]["summary"] = "再次更新章节概要"
+
+    response = await client.put(
+        f"/api/projects/{project_id}",
+        json=first_data,
+        headers={"If-Match": str(first_data["revision"])},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data"]["summary"] == "分析完成概要"
+    assert response.json()["data"]["analysisStatus"] == "completed"
 
 
 @pytest.mark.anyio
@@ -222,6 +381,31 @@ async def test_generate_project_requires_three_chapters(client: AsyncClient, pro
     response = await client.post(f"/api/projects/{project_id}/generate")
 
     assert response.status_code == 409
+
+
+@pytest.mark.anyio
+async def test_generation_respects_target_scene_count(
+    client: AsyncClient,
+    project_data: dict,
+) -> None:
+    raw_text = """第一章 开始
+林墨走进咖啡馆。他坐到窗边。
+
+第二章 继续
+苏禾找到线索。她赶往桥下。
+
+第三章 结尾
+陈望说出真相。众人离开。"""
+    configured = {**project_data, "targetSceneCount": 5, "dialogueDensity": "密集"}
+    project_id = (await client.post("/api/projects", json=configured)).json()["id"]
+    await client.post(f"/api/projects/{project_id}/parse-chapters", json={"raw_text": raw_text})
+    await client.post(f"/api/projects/{project_id}/analyze")
+
+    response = await client.post(f"/api/projects/{project_id}/generate")
+
+    assert response.status_code == 200
+    assert response.json()["scene_count"] == 5
+    assert [item["scene_count"] for item in response.json()["chapter_statuses"]] == [2, 2, 1]
 
 
 @pytest.mark.anyio
@@ -395,8 +579,11 @@ async def test_validate_and_export_yaml(client: AsyncClient, project_data: dict)
     assert export_response.status_code == 200
     assert export_response.headers["content-type"].startswith("application/yaml")
     exported = yaml.safe_load(export_response.text)
+    assert exported["schema_version"] == "storyforge-script/v1"
     assert exported["title"] == "测试故事"
+    assert len(exported["chapters"]) == 3
     assert len(exported["scenes"]) == 3
+    assert exported["scenes"][0]["source_chapter_id"] == "chapter-1"
     assert exported["scenes"][0]["source_chapter"] == "第一章 开始"
 
 
@@ -434,3 +621,146 @@ async def test_invalid_script_cannot_export_yaml(client: AsyncClient, project_da
     export_response = await client.get(f"/api/projects/{project_id}/export/yaml")
     assert export_response.status_code == 422
     assert export_response.json()["detail"]["message"] == "剧本结构校验失败"
+
+
+@pytest.mark.anyio
+async def test_script_schema_is_versioned(client: AsyncClient) -> None:
+    response = await client.get("/api/projects/script-schema")
+
+    assert response.status_code == 200
+    assert response.json()["properties"]["schema_version"]["const"] == "storyforge-script/v1"
+
+
+@pytest.mark.anyio
+async def test_validation_rejects_duplicate_chapters_and_chapters_without_scenes(
+    client: AsyncClient,
+    project_data: dict,
+) -> None:
+    chapters = [
+        {
+            "id": "chapter-1",
+            "title": "第一章",
+            "content": "正文一",
+            "summary": "概要一",
+            "keyEvents": ["事件一"],
+        },
+        {
+            "id": "chapter-1",
+            "title": "第二章",
+            "content": "正文二",
+            "summary": "概要二",
+            "keyEvents": ["事件二"],
+        },
+    ]
+    scene = {
+        "id": "SC-01",
+        "chapterId": "chapter-1",
+        "sourceChapter": "第一章",
+        "title": "场景",
+        "location": "地点",
+        "time": "日",
+        "atmosphere": "平静",
+        "characters": [],
+        "actions": ["动作"],
+        "dialogues": [],
+        "sourceSummary": "概要",
+    }
+    project_id = (
+        await client.post("/api/projects", json={**project_data, "chapters": chapters, "scenes": [scene]})
+    ).json()["id"]
+
+    errors = (await client.get(f"/api/projects/{project_id}/validate-script")).json()["errors"]
+
+    assert "章节 ID 重复：chapter-1" in errors
+
+
+@pytest.mark.anyio
+async def test_manual_scene_changes_recalculate_generation_status(
+    client: AsyncClient,
+    project_data: dict,
+) -> None:
+    raw_text = """第一章 开始
+第一章正文。
+
+第二章 继续
+第二章正文。
+
+第三章 结尾
+第三章正文。"""
+    project_id = (await client.post("/api/projects", json=project_data)).json()["id"]
+    await client.post(f"/api/projects/{project_id}/parse-chapters", json={"raw_text": raw_text})
+    await client.post(f"/api/projects/{project_id}/analyze")
+    await client.post(f"/api/projects/{project_id}/generate")
+    current_response = await client.get(f"/api/projects/{project_id}")
+    current = current_response.json()["data"]
+    current["scenes"] = [
+        scene for scene in current["scenes"] if scene["chapterId"] != "chapter-2"
+    ]
+
+    response = await client.put(
+        f"/api/projects/{project_id}",
+        json=current,
+        headers={"If-Match": str(current_response.json()["data"]["revision"])},
+    )
+
+    assert response.status_code == 200
+    saved = response.json()["data"]
+    assert saved["generationStatus"] == "pending"
+    assert saved["generationChapters"][1]["status"] == "pending"
+    assert saved["generationChapters"][1]["scene_count"] == 0
+
+
+@pytest.mark.anyio
+async def test_update_rejects_stale_revision(client: AsyncClient, project_data: dict) -> None:
+    created = (await client.post("/api/projects", json=project_data)).json()
+    first_update = await client.put(
+        f"/api/projects/{created['id']}",
+        json={**project_data, "title": "第一次更新"},
+        headers={"If-Match": str(created["data"]["revision"])},
+    )
+
+    stale_update = await client.put(
+        f"/api/projects/{created['id']}",
+        json={**project_data, "title": "过期更新"},
+        headers={"If-Match": str(created["data"]["revision"])},
+    )
+
+    assert first_update.status_code == 200
+    assert stale_update.status_code == 409
+
+    missing_revision = await client.put(
+        f"/api/projects/{created['id']}",
+        json={**project_data, "title": "无版本更新"},
+    )
+    assert missing_revision.status_code == 428
+
+
+@pytest.mark.anyio
+async def test_scene_polish_uses_backend_fallback_and_persists(
+    client: AsyncClient,
+    project_data: dict,
+) -> None:
+    raw_text = """第一章 开始
+林墨走进咖啡馆。
+
+第二章 继续
+林墨找到线索。
+
+第三章 结尾
+林墨说出真相。"""
+    project_id = (await client.post("/api/projects", json=project_data)).json()["id"]
+    await client.post(f"/api/projects/{project_id}/parse-chapters", json={"raw_text": raw_text})
+    await client.post(f"/api/projects/{project_id}/analyze")
+    generated = await client.post(f"/api/projects/{project_id}/generate")
+    scene_id = generated.json()["scenes"][0]["id"]
+
+    response = await client.post(
+        f"/api/projects/{project_id}/scenes/{scene_id}/polish",
+        json={"instruction": "改成夜晚并增强冲突"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["mode"] == "local-rules"
+    assert response.json()["scene"]["time"] == "夜"
+    saved = (await client.get(f"/api/projects/{project_id}")).json()["data"]
+    assert saved["scenes"][0]["time"] == "夜"

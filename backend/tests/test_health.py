@@ -47,3 +47,22 @@ async def test_ai_status_does_not_expose_api_key(monkeypatch: pytest.MonkeyPatch
         assert response.status_code == 200
         assert response.json()["configured"] is True
         assert "key" not in response.text.lower()
+
+
+@pytest.mark.anyio
+async def test_optional_api_token_protects_non_health_routes(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("STORYFORGE_API_TOKEN", "test-token")
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        unauthorized = await client.get("/api/ai/status")
+        authorized = await client.get(
+            "/api/ai/status",
+            headers={"Authorization": "Bearer test-token"},
+        )
+        health = await client.get("/api/health")
+
+        assert unauthorized.status_code == 401
+        assert authorized.status_code == 200
+        assert health.status_code == 200

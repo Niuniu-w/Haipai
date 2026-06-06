@@ -47,12 +47,16 @@ def build_generation_input(
     chapters: list[Chapter],
     characters: list[Character],
     max_chars: int,
+    dialogue_density: str = "均衡",
+    target_scene_count: int | None = None,
 ) -> str:
     character_text = "、".join(f"{item.name}（{item.role}）" for item in characters) or "暂无人物表"
     header = (
         f"作品标题：{title}\n故事概要：{summary}\n题材：{genre}\n风格：{style}\n"
         f"改编模式：{adaptation_mode}\n目标剧本类型：{script_type}\n人物表：{character_text}\n"
-        "请将以下章节改编为结构化剧本场景，每章至少生成一个场景，chapterId 必须原样返回："
+        f"对白密度：{dialogue_density}\n目标场景数：{target_scene_count or len(chapters)}\n"
+        "请将以下章节改编为结构化剧本场景，尽量严格满足目标场景数，每章至少生成一个场景，"
+        "chapterId 必须原样返回："
     )
     sections = [header]
     remaining = max_chars - len(header)
@@ -108,6 +112,8 @@ def generate_script_with_model(
     script_type: str,
     chapters: list[Chapter],
     characters: list[Character],
+    dialogue_density: str = "均衡",
+    target_scene_count: int | None = None,
     settings: LLMSettings | None = None,
     client: httpx.Client | None = None,
 ) -> list[Scene]:
@@ -132,6 +138,8 @@ def generate_script_with_model(
             chapters,
             characters,
             settings.max_input_chars,
+            dialogue_density,
+            target_scene_count,
         ),
         "text": {
             "format": {
@@ -169,10 +177,16 @@ def generate_script_with_fallback(
     script_type: str,
     chapters: list[Chapter],
     characters: list[Character],
+    dialogue_density: str = "均衡",
+    target_scene_count: int | None = None,
 ) -> tuple[list[Scene], str, str]:
     settings = get_llm_settings()
     if not settings.configured:
-        return build_local_scenes(chapters, characters, genre, style), "local-rules", ""
+        return (
+            build_local_scenes(chapters, characters, genre, style, dialogue_density, target_scene_count),
+            "local-rules",
+            "",
+        )
     try:
         scenes = generate_script_with_model(
             title,
@@ -183,8 +197,14 @@ def generate_script_with_fallback(
             script_type,
             chapters,
             characters,
+            dialogue_density,
+            target_scene_count,
             settings=settings,
         )
         return scenes, f"openai-responses:{settings.model}", ""
     except LLMAnalysisError as exc:
-        return build_local_scenes(chapters, characters, genre, style), "local-rules-fallback", str(exc)
+        return (
+            build_local_scenes(chapters, characters, genre, style, dialogue_density, target_scene_count),
+            "local-rules-fallback",
+            str(exc),
+        )

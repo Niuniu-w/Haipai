@@ -1,6 +1,8 @@
 import yaml from 'js-yaml'
 import type { Chapter, Project, Scene } from './types'
 
+export const SCRIPT_SCHEMA_VERSION = 'storyforge-script/v1'
+
 export function parseChapters(text: string): Chapter[] {
   const pattern = /^(第[零一二三四五六七八九十百\d]+章[^\n。！？]{0,80}|Chapter\s+\d+[^\n.!?]{0,80})$/gim
   const matches = [...text.matchAll(pattern)]
@@ -25,10 +27,17 @@ export function parseChapters(text: string): Chapter[] {
 
 export function projectToYaml(project: Project): string {
   const output = {
+    schema_version: SCRIPT_SCHEMA_VERSION,
     title: project.title,
     genre: project.genre,
     adaptation_mode: project.adaptationMode,
     script_type: project.scriptType,
+    chapters: project.chapters.map((chapter) => ({
+      id: chapter.id,
+      title: chapter.title,
+      summary: chapter.summary,
+      key_events: chapter.keyEvents,
+    })),
     characters: project.characters.map((character) => ({
       name: character.name,
       role: character.role,
@@ -41,9 +50,11 @@ export function projectToYaml(project: Project): string {
 
 export function validateProjectScript(project: Project): string[] {
   const errors: string[] = []
-  const chapterIds = new Set(project.chapters.map((chapter) => chapter.id))
+  const rawChapterIds = project.chapters.map((chapter) => chapter.id.trim()).filter(Boolean)
+  const chapterIds = new Set(rawChapterIds)
   const chapterTitles = new Map(project.chapters.map((chapter) => [chapter.id, chapter.title]))
   const characterNames = new Set(project.characters.map((character) => character.name.trim()).filter(Boolean))
+  const duplicateChapterIds = [...new Set(rawChapterIds.filter((id, index) => rawChapterIds.indexOf(id) !== index))]
   const duplicateCharacterNames = [...new Set(project.characters
     .map((character) => character.name.trim())
     .filter((name, index, names) => name && names.indexOf(name) !== index))]
@@ -54,6 +65,19 @@ export function validateProjectScript(project: Project): string[] {
   if (!project.genre.trim()) errors.push('题材不能为空')
   if (!project.adaptationMode.trim()) errors.push('改编模式不能为空')
   if (!project.scriptType.trim()) errors.push('目标剧本类型不能为空')
+  if (!project.chapters.length) errors.push('至少需要一个来源章节')
+  if (duplicateChapterIds.length) errors.push(`章节 ID 重复：${duplicateChapterIds.join('、')}`)
+  project.chapters.forEach((chapter, index) => {
+    if (!chapter.id.trim() || !chapter.title.trim() || !chapter.summary.trim()) {
+      errors.push(`第 ${index + 1} 个章节字段不完整`)
+    }
+    if (!chapter.keyEvents.length || chapter.keyEvents.some((event) => !event.trim())) {
+      errors.push(`${chapter.title || `第 ${index + 1} 章`}：关键事件不能为空`)
+    }
+    if (!project.scenes.some((scene) => scene.chapterId === chapter.id)) {
+      errors.push(`${chapter.title || `第 ${index + 1} 章`}：至少需要一个场景`)
+    }
+  })
   if (duplicateCharacterNames.length) errors.push(`人物名称重复：${duplicateCharacterNames.join('、')}`)
   project.characters.forEach((character, index) => {
     if (!character.name.trim() || !character.role.trim() || !character.description.trim()) {
@@ -62,6 +86,13 @@ export function validateProjectScript(project: Project): string[] {
   })
   if (!project.scenes.length) errors.push('至少需要一个剧本场景')
   if (duplicateSceneIds.length) errors.push(`场景编号重复：${duplicateSceneIds.join('、')}`)
+  project.relationships.forEach((relationship, index) => {
+    if (!relationship.from.trim() || !relationship.to.trim() || !relationship.relation.trim()) {
+      errors.push(`第 ${index + 1} 条人物关系字段不完整`)
+    } else if (!characterNames.has(relationship.from) || !characterNames.has(relationship.to)) {
+      errors.push(`第 ${index + 1} 条人物关系引用了人物表之外的人物`)
+    }
+  })
 
   project.scenes.forEach((scene, index) => {
     const label = scene.id.trim() || `第 ${index + 1} 场`
@@ -99,6 +130,7 @@ export function validateProjectScript(project: Project): string[] {
 function sceneToOutput(scene: Scene) {
   return {
     id: scene.id,
+    source_chapter_id: scene.chapterId,
     source_chapter: scene.sourceChapter,
     title: scene.title,
     location: scene.location,
@@ -109,6 +141,54 @@ function sceneToOutput(scene: Scene) {
     dialogues: scene.dialogues.map(({ character, emotion, line }) => ({ character, emotion, line })),
     source_summary: scene.sourceSummary,
   }
+}
+
+export function nextSceneId(scenes: Scene[]): string {
+  const used = new Set(scenes.map((scene) => scene.id))
+  let number = Math.max(
+    0,
+    ...scenes.map((scene) => Number(scene.id.match(/^SC-(\d+)$/i)?.[1] ?? 0)),
+  ) + 1
+  while (used.has(`SC-${String(number).padStart(2, '0')}`)) number += 1
+  return `SC-${String(number).padStart(2, '0')}`
+}
+
+export function syncGenerationStats(project: Project): void {
+  const previous = new Map(project.generationChapters.map((state) => [state.chapter_id, state]))
+  project.generationChapters = project.chapters.map((chapter) => {
+    const existing = previous.get(chapter.id)
+    const sceneCount = project.scenes.filter((scene) => scene.chapterId === chapter.id).length
+    return {
+      chapter_id: chapter.id,
+      status: sceneCount ? 'completed' : 'pending',
+      mode: sceneCount ? (existing?.mode ?? project.generationMode) : '',
+      attempts: existing?.attempts ?? 0,
+      error: '',
+      scene_count: sceneCount,
+    }
+  })
+  project.generationStatus = project.generationChapters.length
+    && project.generationChapters.every((state) => state.status === 'completed')
+    ? 'completed'
+    : 'pending'
+  project.generationError = ''
+  if (!project.scenes.length) project.generationMode = ''
+}
+
+export function formatUpdatedAt(value: string): string {
+  const timestamp = Date.parse(value)
+  if (!Number.isFinite(timestamp)) return value || '尚未保存'
+  const elapsed = Date.now() - timestamp
+  if (elapsed < 60_000) return '刚刚'
+  if (elapsed < 3_600_000) return `${Math.floor(elapsed / 60_000)} 分钟前`
+  if (elapsed < 86_400_000) return `${Math.floor(elapsed / 3_600_000)} 小时前`
+  return new Intl.DateTimeFormat('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(new Date(timestamp))
 }
 
 export function downloadText(filename: string, content: string) {

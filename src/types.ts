@@ -62,11 +62,14 @@ export interface Project {
   summary: string
   adaptationMode: string
   scriptType: string
+  dialogueDensity: '少量' | '均衡' | '密集'
+  targetSceneCount: number
   chapters: Chapter[]
   characters: Character[]
   relationships: Relationship[]
   scenes: Scene[]
   updatedAt: string
+  revision: number
   analysisStatus: 'pending' | 'running' | 'completed' | 'failed'
   analysisMode: string
   analysisError: string
