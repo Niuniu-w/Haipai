@@ -242,7 +242,7 @@ async function applyPolish() {
       Object.assign(activeScene.value, result.scene)
       emit(
         'notify',
-        result.mode.startsWith('openai-responses:')
+        !['local-rules', 'local-rules-fallback'].includes(result.mode)
           ? '大模型已润色并保存当前场景'
           : result.mode === 'local-rules-fallback'
             ? '模型调用失败，已回退本地规则润色'

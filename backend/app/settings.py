@@ -14,10 +14,16 @@ class LLMSettings:
     model: str
     timeout_seconds: float
     max_input_chars: int
+    provider: str = "openai-responses"
+    api_style: str = "responses"
 
     @property
     def configured(self) -> bool:
         return bool(self.api_key)
+
+    @property
+    def mode(self) -> str:
+        return f"{self.provider}:{self.model}"
 
 
 def get_llm_settings() -> LLMSettings:
@@ -27,6 +33,8 @@ def get_llm_settings() -> LLMSettings:
         model=os.getenv("STORYFORGE_LLM_MODEL", "gpt-5-mini").strip(),
         timeout_seconds=float(os.getenv("STORYFORGE_LLM_TIMEOUT_SECONDS", "60")),
         max_input_chars=int(os.getenv("STORYFORGE_LLM_MAX_INPUT_CHARS", "60000")),
+        provider=os.getenv("STORYFORGE_LLM_PROVIDER", "openai-responses").strip(),
+        api_style=os.getenv("STORYFORGE_LLM_API_STYLE", "responses").strip(),
     )
 
 

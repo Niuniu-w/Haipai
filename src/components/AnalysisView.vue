@@ -22,6 +22,10 @@ const canAnalyze = computed(() => props.backendConnected && Boolean(props.projec
 const characterColors = ['#bd6c55', '#6f8674', '#7c7894', '#b08968', '#617c8b', '#9a6d78']
 const previousCharacterNames = new Map<string, string>()
 
+function isRealModelMode(mode: string) {
+  return Boolean(mode) && !['demo', 'legacy-local', 'local-rules', 'local-rules-fallback'].includes(mode)
+}
+
 function addCharacter() {
   const number = props.project.characters.length + 1
   props.project.characters.push({
@@ -141,7 +145,7 @@ async function runAnalysis() {
         <LoaderCircle v-if="isAnalyzing" class="spin" :size="18" />
         <Sparkles v-else :size="18" />
         <span v-if="isAnalyzing"><b>分析中</b> 正在理解人物与剧情</span>
-        <span v-else-if="hasAnalysis"><b>已完成</b> {{ project.analysisMode.startsWith('openai-responses:') ? '真实大模型分析' : project.analysisMode === 'local-rules-fallback' ? '模型失败 · 本地回退' : '本地规则分析' }}</span>
+        <span v-else-if="hasAnalysis"><b>已完成</b> {{ isRealModelMode(project.analysisMode) ? '真实大模型分析' : project.analysisMode === 'local-rules-fallback' ? '模型失败 · 本地回退' : '本地规则分析' }}</span>
         <span v-else><b>待分析</b> 当前展示基础文本解析结果</span>
       </div>
     </div>
@@ -256,7 +260,7 @@ async function runAnalysis() {
 
     <div class="flow-footer">
       <button class="button ghost" @click="$emit('back')"><ArrowLeft :size="16" /> 返回章节</button>
-      <span>{{ project.analysisMode.startsWith('openai-responses:') ? '当前为真实大模型分析，所有结果均可编辑' : '当前为本地规则分析，所有结果均可编辑' }}</span>
+      <span>{{ isRealModelMode(project.analysisMode) ? '当前为真实大模型分析，所有结果均可编辑' : '当前为本地规则分析，所有结果均可编辑' }}</span>
       <button class="button primary" @click="$emit('next')">生成结构化剧本 <ArrowRight :size="16" /></button>
     </div>
   </section>

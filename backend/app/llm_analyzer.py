@@ -1,9 +1,7 @@
-import json
-from typing import Any
-
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from .llm_client import LLMAnalysisError, request_structured_output
 from .schemas import Chapter, Character, Relationship
 from .settings import LLMSettings, get_llm_settings
 from .story_analyzer import analyze_story
@@ -47,10 +45,6 @@ class LLMStoryAnalysis(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-class LLMAnalysisError(RuntimeError):
-    pass
-
-
 def build_story_input(title: str, chapters: list[Chapter], max_chars: int) -> str:
     sections = [f"作品标题：{title}", "请分析以下小说章节："]
     remaining = max_chars - sum(len(section) for section in sections)
@@ -64,17 +58,6 @@ def build_story_input(title: str, chapters: list[Chapter], max_chars: int) -> st
         remaining -= len(prefix) + len(content)
 
     return "".join(sections)
-
-
-def extract_output_text(response_data: dict[str, Any]) -> str:
-    if isinstance(response_data.get("output_text"), str):
-        return response_data["output_text"]
-
-    for item in response_data.get("output", []):
-        for content in item.get("content", []):
-            if content.get("type") == "output_text" and isinstance(content.get("text"), str):
-                return content["text"]
-    raise LLMAnalysisError("模型响应中没有可解析的文本结果")
 
 
 def convert_model_analysis(analysis: LLMStoryAnalysis, chapters: list[Chapter]) -> dict:
@@ -125,40 +108,22 @@ def analyze_story_with_model(
     if not settings.configured:
         raise LLMAnalysisError("未配置大模型 API Key")
 
-    payload = {
-        "model": settings.model,
-        "store": False,
-        "instructions": (
-            "你是专业的中文小说故事分析师。请只根据输入章节分析故事，"
-            "不要虚构原文不存在的人物或事件。人物名称必须保持一致，章节 id 必须原样返回。"
-        ),
-        "input": build_story_input(title, chapters, settings.max_input_chars),
-        "text": {
-            "format": {
-                "type": "json_schema",
-                "name": "story_analysis",
-                "strict": True,
-                "schema": LLMStoryAnalysis.model_json_schema(by_alias=True),
-            }
-        },
-    }
-    owns_client = client is None
-    client = client or httpx.Client(timeout=settings.timeout_seconds)
-
     try:
-        response = client.post(
-            f"{settings.base_url}/responses",
-            headers={"Authorization": f"Bearer {settings.api_key}", "Content-Type": "application/json"},
-            json=payload,
+        output = request_structured_output(
+            settings,
+            (
+                "你是专业的中文小说故事分析师。请只根据输入章节分析故事，"
+                "不要虚构原文不存在的人物或事件。人物名称必须保持一致，章节 id 必须原样返回。"
+            ),
+            build_story_input(title, chapters, settings.max_input_chars),
+            LLMStoryAnalysis.model_json_schema(by_alias=True),
+            "story_analysis",
+            client,
         )
-        response.raise_for_status()
-        analysis = LLMStoryAnalysis.model_validate_json(extract_output_text(response.json()))
+        analysis = LLMStoryAnalysis.model_validate_json(output)
         return convert_model_analysis(analysis, chapters)
-    except (httpx.HTTPError, json.JSONDecodeError, ValidationError, ValueError) as exc:
+    except (LLMAnalysisError, ValidationError, ValueError) as exc:
         raise LLMAnalysisError("大模型调用或结构化结果校验失败") from exc
-    finally:
-        if owns_client:
-            client.close()
 
 
 def analyze_story_with_fallback(title: str, chapters: list[Chapter]) -> tuple[dict, str, str]:
@@ -167,6 +132,6 @@ def analyze_story_with_fallback(title: str, chapters: list[Chapter]) -> tuple[di
         return analyze_story(title, chapters), "local-rules", ""
 
     try:
-        return analyze_story_with_model(title, chapters, settings=settings), f"openai-responses:{settings.model}", ""
+        return analyze_story_with_model(title, chapters, settings=settings), settings.mode, ""
     except LLMAnalysisError as exc:
         return analyze_story(title, chapters), "local-rules-fallback", str(exc)

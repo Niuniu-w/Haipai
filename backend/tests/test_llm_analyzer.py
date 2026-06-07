@@ -82,6 +82,44 @@ def test_model_analysis_uses_structured_output_and_validates_result() -> None:
     assert client.request_json["text"]["format"]["strict"] is True
 
 
+def test_dashscope_chat_completions_uses_json_mode() -> None:
+    chapters = [
+        Chapter(
+            id="chapter-1",
+            title="第一章",
+            content="记者林墨开始调查。",
+            summary="原摘要",
+            keyEvents=["原事件"],
+        )
+    ]
+    model_output = {
+        "summary": "林墨开始调查一桩案件。",
+        "genre": "悬疑",
+        "era": "当代",
+        "style": "紧凑",
+        "characters": [{"name": "林墨", "role": "记者", "description": "负责调查案件。"}],
+        "relationships": [],
+        "chapters": [{"id": "chapter-1", "summary": "林墨开始调查。", "keyEvents": ["开始调查"]}],
+    }
+    client = FakeClient({"choices": [{"message": {"content": json.dumps(model_output, ensure_ascii=False)}}]})
+    settings = LLMSettings(
+        api_key="test-key",
+        base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+        model="qwen-plus",
+        timeout_seconds=10,
+        max_input_chars=10000,
+        provider="dashscope-chat-completions",
+        api_style="chat-completions",
+    )
+
+    result = analyze_story_with_model("测试故事", chapters, settings=settings, client=client)
+
+    assert result["genre"] == "悬疑"
+    assert client.request_url.endswith("/chat/completions")
+    assert client.request_json["response_format"] == {"type": "json_object"}
+    assert "JSON Schema" in client.request_json["messages"][0]["content"]
+
+
 def test_model_failure_falls_back_to_local_rules(monkeypatch) -> None:
     monkeypatch.setenv("STORYFORGE_LLM_API_KEY", "test-key")
     chapters = [

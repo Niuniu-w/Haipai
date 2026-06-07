@@ -31,13 +31,15 @@ const hasFailed = computed(() => props.project.generationChapters.some((item) =>
 const hasPending = computed(() => props.project.generationChapters.some((item) => item.status === 'pending'))
 const initialized = computed(() => props.project.generationAttempts > 0 && props.project.generationChapters.length > 0)
 const stages = ['初始化逐章任务', '逐章调用模型', '每章完成立即持久化', '全部章节生成完成']
+const isRealModelMode = (mode: string) =>
+  Boolean(mode) && !['demo', 'legacy-local', 'local-rules', 'local-rules-fallback', 'mixed'].includes(mode)
 const stage = computed(() => {
   if (complete.value) return stages.length
   if (isGenerating.value || completedCount.value > 0 || hasFailed.value) return 1
   return initialized.value ? 1 : 0
 })
 const modeLabel = computed(() => {
-  if (props.project.generationMode.startsWith('openai-responses:')) return '真实大模型生成'
+  if (isRealModelMode(props.project.generationMode)) return '真实大模型生成'
   if (props.project.generationMode === 'local-rules-fallback') return '模型失败 · 本地回退'
   if (props.project.generationMode === 'local-rules') return '本地规则生成'
   return props.aiConfigured ? `将使用 ${props.aiModel}` : '将使用本地规则'

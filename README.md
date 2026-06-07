@@ -28,7 +28,7 @@
 | YAML 导出 | 已完成 | 使用 `storyforge-script/v1` 正式 Schema，支持前后端校验、服务端导出、复制和下载 |
 | 项目自动保存 | 已完成 | 串行保存并使用项目版本号检测冲突；离线新内容不会被旧远端数据无条件覆盖 |
 | 历史项目管理 | 已完成 | 首页支持打开、确认删除和查看全部后端历史项目 |
-| 大模型故事分析 | 已完成可选接入 | 配置后端 API Key 后使用 Responses API；未配置或失败时自动回退本地规则 |
+| 大模型故事分析 | 已完成可选接入 | 默认支持 DashScope `qwen-plus`，并兼容 Responses API；未配置或失败时自动回退本地规则 |
 | FastAPI 后端骨架 | 已完成 | 提供健康检查、可配置 CORS、可选 API Token、版本迁移和自动测试 |
 | 前后端健康检查连接 | 已完成 | 前端显示后端连接状态并支持自动重试 |
 | SQLite 数据库 | 已完成 | 使用 SQLAlchemy 提供项目创建、查询、更新和删除接口 |
@@ -68,7 +68,7 @@ backend/.venv/bin/uvicorn app.main:app --reload --app-dir backend
 
 如后端设置了 `STORYFORGE_API_TOKEN`，前端需要将同一个值配置为 `VITE_API_TOKEN`。线上前端域名需加入后端 `STORYFORGE_CORS_ORIGINS`，多个域名使用逗号分隔。
 
-真实大模型为可选配置。参考 [`backend/.env.example`](./backend/.env.example) 设置后端密钥；密钥只由后端读取，未配置时项目仍使用本地规则完成故事分析。
+真实大模型为可选配置。后端默认配置示例使用阿里云 DashScope OpenAI 兼容接口与 `qwen-plus`；参考 [`backend/.env.example`](./backend/.env.example) 设置密钥。密钥只由后端读取，未配置时项目仍使用本地规则完成故事分析。
 
 ## 演示流程
 
