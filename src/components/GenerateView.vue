@@ -14,8 +14,6 @@ const props = defineProps<{
   project: Project
   projectId: string
   backendConnected: boolean
-  aiConfigured: boolean
-  aiModel: string
 }>()
 const emit = defineEmits<{ back: []; next: []; notify: [message: string] }>()
 
@@ -30,21 +28,12 @@ const percentage = computed(() => props.project.chapters.length
 const hasFailed = computed(() => props.project.generationChapters.some((item) => item.status === 'failed'))
 const hasPending = computed(() => props.project.generationChapters.some((item) => item.status === 'pending'))
 const initialized = computed(() => props.project.generationAttempts > 0 && props.project.generationChapters.length > 0)
-const stages = ['初始化逐章任务', '逐章调用模型', '每章完成立即持久化', '全部章节生成完成']
-const isRealModelMode = (mode: string) =>
-  Boolean(mode) && !['demo', 'legacy-local', 'local-rules', 'local-rules-fallback', 'mixed'].includes(mode)
+const stages = ['准备章节', '逐章改编', '整理场景', '剧本初稿完成']
 const stage = computed(() => {
   if (complete.value) return stages.length
   if (isGenerating.value || completedCount.value > 0 || hasFailed.value) return 1
   return initialized.value ? 1 : 0
 })
-const modeLabel = computed(() => {
-  if (isRealModelMode(props.project.generationMode)) return '真实大模型生成'
-  if (props.project.generationMode === 'local-rules-fallback') return '模型失败 · 本地回退'
-  if (props.project.generationMode === 'local-rules') return '本地规则生成'
-  return props.aiConfigured ? `将使用 ${props.aiModel}` : '将使用本地规则'
-})
-
 function chapterState(chapterId: string): GenerationChapterState {
   return props.project.generationChapters.find((item) => item.chapter_id === chapterId) ?? {
     chapter_id: chapterId,
@@ -109,7 +98,7 @@ async function startGeneration() {
   if (isGenerating.value) return
   if (!props.backendConnected || !props.projectId) {
     props.project.generationStatus = 'failed'
-    props.project.generationError = '请先连接后端再生成剧本'
+    props.project.generationError = '暂时无法开始生成，请稍后重试'
     emit('notify', props.project.generationError)
     return
   }
@@ -121,7 +110,7 @@ async function startGeneration() {
     if (complete.value) emit('notify', `剧本生成完成，共 ${props.project.scenes.length} 个场景`)
   } catch {
     props.project.generationStatus = 'failed'
-    props.project.generationError = '无法初始化逐章生成任务，请检查后端连接后重试'
+    props.project.generationError = '剧本生成未能开始，请稍后重试'
     emit('notify', props.project.generationError)
   } finally {
     isGenerating.value = false
@@ -143,7 +132,7 @@ async function retryChapter(chapterId: string) {
   if (isGenerating.value) return
   isGenerating.value = true
   try {
-    if (await generateOneChapter(chapterId)) emit('notify', '该章节已重新生成并保存')
+    if (await generateOneChapter(chapterId)) emit('notify', '该章节已重新生成')
   } finally {
     isGenerating.value = false
   }
@@ -153,7 +142,7 @@ onMounted(async () => {
   if (!props.backendConnected || !props.projectId) {
     if (!complete.value) {
       props.project.generationStatus = 'failed'
-      props.project.generationError = '请先连接后端再生成剧本'
+      props.project.generationError = '暂时无法开始生成，请稍后重试'
     }
     return
   }
@@ -164,7 +153,7 @@ onMounted(async () => {
     else if (!hasFailed.value) await continueGeneration()
   } catch {
     props.project.generationStatus = 'failed'
-    props.project.generationError = '无法读取后端生成状态'
+    props.project.generationError = '无法读取生成进度，请稍后重试'
   }
 })
 </script>
@@ -176,7 +165,7 @@ onMounted(async () => {
       <div class="generate-mark"><Sparkles :size="24" /></div>
       <span class="section-index">03 / GENERATE</span>
       <h2>{{ complete ? '剧本初稿已准备好' : project.generationStatus === 'failed' ? '剧本生成未完成' : '正在逐章把文字变成镜头' }}</h2>
-      <p>{{ complete ? `${modeLabel}，所有章节均已保存到后端。` : project.generationStatus === 'failed' ? project.generationError : `${modeLabel}，每完成一章就会立即保存。` }}</p>
+      <p>{{ complete ? '已减少旁白并优先通过人物对白推进剧情。' : project.generationStatus === 'failed' ? project.generationError : '正在逐章改编，优先用人物对白呈现剧情与冲突。' }}</p>
 
       <div class="progress-orbit" :style="{ '--progress': percentage + '%' }">
         <div><strong>{{ percentage }}<small>%</small></strong><span>{{ complete ? '生成完成' : '真实进度' }}</span></div>

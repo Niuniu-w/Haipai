@@ -8,8 +8,6 @@ const props = defineProps<{
   project: Project
   projectId: string
   backendConnected: boolean
-  aiConfigured: boolean
-  aiModel: string
 }>()
 const emit = defineEmits<{ back: []; next: []; notify: [message: string] }>()
 const activeChapter = ref(0)
@@ -21,10 +19,6 @@ const hasAnalysis = computed(() => Boolean(props.project.summary || props.projec
 const canAnalyze = computed(() => props.backendConnected && Boolean(props.projectId) && props.project.chapters.length >= 3)
 const characterColors = ['#bd6c55', '#6f8674', '#7c7894', '#b08968', '#617c8b', '#9a6d78']
 const previousCharacterNames = new Map<string, string>()
-
-function isRealModelMode(mode: string) {
-  return Boolean(mode) && !['demo', 'legacy-local', 'local-rules', 'local-rules-fallback'].includes(mode)
-}
 
 function addCharacter() {
   const number = props.project.characters.length + 1
@@ -52,8 +46,8 @@ function syncCharacterName(characterId: string, name: string) {
   })
   props.project.scenes.forEach((scene) => {
     scene.characters = scene.characters.map((character) => character === previous ? name : character)
-    scene.dialogues.forEach((dialogue) => {
-      if (dialogue.character === previous) dialogue.character = name
+    scene.content.forEach((item) => {
+      if (item.type === 'dialogue' && item.character === previous) item.character = name
     })
   })
   emit('notify', `已同步更新“${previous}”的全部引用`)
@@ -68,7 +62,7 @@ function removeCharacter(characterId: string) {
   )
   props.project.scenes.forEach((scene) => {
     scene.characters = scene.characters.filter((name) => name !== character.name)
-    scene.dialogues = scene.dialogues.filter((dialogue) => dialogue.character !== character.name)
+    scene.content = scene.content.filter((item) => item.type !== 'dialogue' || item.character !== character.name)
   })
   emit('notify', `已删除人物“${character.name}”及其引用`)
 }
@@ -91,7 +85,7 @@ function addKeyEvent() {
 
 async function runAnalysis() {
   if (!canAnalyze.value || isAnalyzing.value) {
-    emit('notify', props.backendConnected ? '至少需要 3 个章节才能开始分析' : '请先连接后端再开始分析')
+    emit('notify', props.backendConnected ? '至少需要 3 个章节才能开始分析' : '暂时无法开始分析，请稍后重试')
     return
   }
 
@@ -117,15 +111,10 @@ async function runAnalysis() {
     props.project.generationError = ''
     props.project.generationAttempts = 0
     props.project.generationChapters = []
-    emit(
-      'notify',
-      result.analysis_mode === 'local-rules-fallback'
-        ? `大模型调用失败，已回退本地分析并识别 ${result.characters.length} 位主要人物`
-        : `故事分析完成，识别 ${result.characters.length} 位主要人物`,
-    )
+    emit('notify', `故事分析完成，识别 ${result.characters.length} 位主要人物`)
   } catch {
     props.project.analysisStatus = 'failed'
-    props.project.analysisError = '故事分析失败，请检查后端连接后重试'
+    props.project.analysisError = '故事分析失败，请稍后重试'
     emit('notify', props.project.analysisError)
   } finally {
     isAnalyzing.value = false
@@ -139,13 +128,13 @@ async function runAnalysis() {
       <div>
         <span class="section-index">02 / ANALYSIS</span>
         <h2>故事骨架已经浮现</h2>
-        <p>{{ aiConfigured ? `已配置 ${aiModel}，将优先使用真实大模型分析。` : '未配置大模型密钥，将使用可离线运行的本地规则分析。' }}</p>
+        <p>我们会梳理故事概要、主要人物、关系与章节脉络。</p>
       </div>
       <div class="analysis-score">
         <LoaderCircle v-if="isAnalyzing" class="spin" :size="18" />
         <Sparkles v-else :size="18" />
         <span v-if="isAnalyzing"><b>分析中</b> 正在理解人物与剧情</span>
-        <span v-else-if="hasAnalysis"><b>已完成</b> {{ isRealModelMode(project.analysisMode) ? '真实大模型分析' : project.analysisMode === 'local-rules-fallback' ? '模型失败 · 本地回退' : '本地规则分析' }}</span>
+        <span v-else-if="hasAnalysis"><b>已完成</b> 故事分析结果可继续编辑</span>
         <span v-else><b>待分析</b> 当前展示基础文本解析结果</span>
       </div>
     </div>
@@ -158,7 +147,7 @@ async function runAnalysis() {
             <button class="button soft small" :disabled="isAnalyzing || !canAnalyze" @click="runAnalysis">
               <LoaderCircle v-if="isAnalyzing" class="spin" :size="13" />
               <Sparkles v-else :size="13" />
-              {{ isAnalyzing ? '分析中…' : hasAnalysis ? '重新分析' : aiConfigured ? '开始大模型分析' : '开始本地分析' }}
+              {{ isAnalyzing ? '分析中…' : hasAnalysis ? '重新分析' : '开始分析' }}
             </button>
           </div>
           <textarea v-model="project.summary"></textarea>
@@ -232,7 +221,7 @@ async function runAnalysis() {
           </div>
           <label class="setting-control"><span>对白密度</span><select v-model="project.dialogueDensity"><option v-for="density in dialogueDensities" :key="density" :value="density">{{ density }}</option></select></label>
           <label class="setting-control"><span>目标场景数</span><input v-model.number="project.targetSceneCount" type="number" :min="Math.max(project.chapters.length, 1)" :max="Math.max(project.chapters.length * 4, 4)" /></label>
-          <p class="settings-note">目标场景会按章节分配，每章至少一场；真实模型与本地规则都会读取这两个参数。</p>
+          <p class="settings-note">默认优先用人物对白推进剧情，减少旁白；目标场景会按章节分配，每章至少一场。</p>
         </div>
 
         <div class="panel relation-card">
@@ -260,7 +249,7 @@ async function runAnalysis() {
 
     <div class="flow-footer">
       <button class="button ghost" @click="$emit('back')"><ArrowLeft :size="16" /> 返回章节</button>
-      <span>{{ isRealModelMode(project.analysisMode) ? '当前为真实大模型分析，所有结果均可编辑' : '当前为本地规则分析，所有结果均可编辑' }}</span>
+      <span>所有分析结果均可继续编辑</span>
       <button class="button primary" @click="$emit('next')">生成结构化剧本 <ArrowRight :size="16" /></button>
     </div>
   </section>

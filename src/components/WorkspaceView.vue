@@ -54,18 +54,31 @@ const groupedScenes = computed(() =>
   })),
 )
 
-function addAction() {
-  activeScene.value.actions.push('添加一条动作描述…')
+function nextContentId() {
+  const used = new Set(activeScene.value.content.map((item) => item.id))
+  let number = activeScene.value.content.length + 1
+  while (used.has(`${activeScene.value.id}-content-${number}`)) number += 1
+  return `${activeScene.value.id}-content-${number}`
 }
 
-function addDialogue() {
+function addContent(type: 'action' | 'dialogue') {
+  if (type === 'action') {
+    activeScene.value.content.push({
+      id: nextContentId(),
+      type: 'action',
+      action: '添加一条动作描述…',
+    })
+    return
+  }
   const speaker = activeScene.value.characters[0]
   if (!speaker) {
     emit('notify', '请先为本场添加出场人物，再添加对白')
     return
   }
-  activeScene.value.dialogues.push({
-    id: `dialogue-${Date.now()}`,
+  activeScene.value.content.push({
+    id: nextContentId(),
+    type: 'dialogue',
+    action: `${speaker}准备开口。`,
     character: speaker,
     emotion: '平静',
     line: '输入人物对白…',
@@ -80,7 +93,7 @@ function addSceneCharacter(name: string) {
 }
 
 function removeSceneCharacter(name: string) {
-  if (activeScene.value.dialogues.some((dialogue) => dialogue.character === name)) {
+  if (activeScene.value.content.some((item) => item.type === 'dialogue' && item.character === name)) {
     emit('notify', `“${name}”仍有对白，请先调整或删除相关对白`)
     return
   }
@@ -95,18 +108,11 @@ function toggleCharacterPicker() {
   characterPickerOpen.value = !characterPickerOpen.value
 }
 
-function moveDialogue(index: number, direction: number) {
+function moveContent(index: number, direction: number) {
   const target = index + direction
-  if (target < 0 || target >= activeScene.value.dialogues.length) return
-  const [dialogue] = activeScene.value.dialogues.splice(index, 1)
-  activeScene.value.dialogues.splice(target, 0, dialogue)
-}
-
-function moveAction(index: number, direction: number) {
-  const target = index + direction
-  if (target < 0 || target >= activeScene.value.actions.length) return
-  const [action] = activeScene.value.actions.splice(index, 1)
-  activeScene.value.actions.splice(target, 0, action)
+  if (target < 0 || target >= activeScene.value.content.length) return
+  const [item] = activeScene.value.content.splice(index, 1)
+  activeScene.value.content.splice(target, 0, item)
 }
 
 function addScene() {
@@ -116,8 +122,9 @@ function addScene() {
     emit('notify', '请先识别并保留至少一个章节')
     return
   }
+  const sceneId = nextSceneId(props.project.scenes)
   const scene: Scene = {
-    id: nextSceneId(props.project.scenes),
+    id: sceneId,
     chapterId: chapter.id,
     sourceChapter: chapter.title,
     title: '新场景',
@@ -125,8 +132,11 @@ function addScene() {
     time: '日',
     atmosphere: '待定',
     characters: [],
-    actions: ['输入动作描述…'],
-    dialogues: [],
+    content: [{
+      id: `${sceneId}-content-1`,
+      type: 'action',
+      action: '输入动作描述…',
+    }],
     sourceSummary: chapter.summary,
   }
   props.project.scenes.push(scene)
@@ -190,17 +200,17 @@ async function downloadYaml() {
       if (!await props.saveProject()) return
       const validation = await validateProjectYaml(props.projectId)
       if (!validation.valid) {
-        emit('notify', `服务端校验失败：${validation.errors[0]}`)
+        emit('notify', `结构校验失败：${validation.errors[0]}`)
         return
       }
       downloadText(`${props.project.title}.yaml`, await exportProjectYaml(props.projectId))
-      emit('notify', '服务端校验通过，YAML 已导出')
+      emit('notify', 'YAML 已导出')
     } else {
       downloadText(`${props.project.title}.yaml`, yamlText.value)
-      emit('notify', '本地结构校验通过，YAML 已导出')
+      emit('notify', 'YAML 已导出')
     }
   } catch {
-    emit('notify', '服务端 YAML 导出失败，请检查后端连接')
+    emit('notify', 'YAML 导出失败，请稍后重试')
   } finally {
     isExporting.value = false
   }
@@ -210,24 +220,38 @@ function applyLocalPolish(instruction: string) {
   if (/夜晚|夜景|改成夜/.test(instruction)) activeScene.value.time = '夜'
   if (/冲突|紧张|对峙/.test(instruction)) {
     activeScene.value.atmosphere = `${activeScene.value.atmosphere.replace(/、冲突升级$/, '')}、冲突升级`
-    activeScene.value.actions.push('人物的目标正面碰撞，现场气氛骤然收紧。')
+    activeScene.value.content.push({
+      id: nextContentId(),
+      type: 'action',
+      action: '人物的目标正面碰撞，现场气氛骤然收紧。',
+    })
   }
   if (/对白|对话/.test(instruction)) {
     const speaker = activeScene.value.characters[0] ?? props.project.characters[0]?.name
     if (speaker) {
       if (!activeScene.value.characters.includes(speaker)) activeScene.value.characters.push(speaker)
-      activeScene.value.dialogues.push({
-        id: `dialogue-${Date.now()}`,
+      activeScene.value.content.push({
+        id: nextContentId(),
+        type: 'dialogue',
+        action: `${speaker}直视对方，把压在心里的话说出口。`,
         character: speaker,
         emotion: '坚定',
         line: '把真正想说的话说出来。',
       })
     } else {
-      activeScene.value.actions.push('人物欲言又止，未说出口的话让气氛更紧张。')
+      activeScene.value.content.push({
+        id: nextContentId(),
+        type: 'action',
+        action: '人物欲言又止，未说出口的话让气氛更紧张。',
+      })
     }
   }
   if (!/夜晚|夜景|改成夜|冲突|紧张|对峙|对白|对话/.test(instruction)) {
-    activeScene.value.actions.push(`本地规则调整提示：${instruction || '强化当前场景的画面表达。'}`)
+    activeScene.value.content.push({
+      id: nextContentId(),
+      type: 'action',
+      action: `强化当前场景的画面表达：${instruction || '优化节奏与人物行为。'}`,
+    })
   }
 }
 
@@ -240,20 +264,13 @@ async function applyPolish() {
       if (!await props.saveProject()) return
       const result = await polishProjectScene(props.projectId, activeScene.value.id, instruction)
       Object.assign(activeScene.value, result.scene)
-      emit(
-        'notify',
-        !['local-rules', 'local-rules-fallback'].includes(result.mode)
-          ? '大模型已润色并保存当前场景'
-          : result.mode === 'local-rules-fallback'
-            ? '模型调用失败，已回退本地规则润色'
-            : '已使用后端本地规则润色当前场景',
-      )
+      emit('notify', '当前场景已润色')
     } else {
       applyLocalPolish(instruction)
-      emit('notify', '后端未连接，已使用浏览器本地规则润色')
+      emit('notify', '当前场景已润色')
     }
   } catch {
-    emit('notify', '场景润色失败，请检查后端连接后重试')
+    emit('notify', '场景润色失败，请稍后重试')
     return
   } finally {
     isPolishing.value = false
@@ -336,33 +353,38 @@ function moveScene(direction: number) {
           </div>
 
           <div class="editor-section">
-            <div class="editor-section-title"><span>动作描述</span><button @click="addAction"><Plus :size="13" /> 添加动作</button></div>
-            <div class="action-list">
-              <div v-for="(_, index) in activeScene.actions" :key="index" class="action-row">
-                <GripVertical :size="15" />
-                <div class="row-move-actions">
-                  <button title="上移动作" :disabled="index === 0" @click="moveAction(index, -1)"><ArrowUp :size="12" /></button>
-                  <button title="下移动作" :disabled="index === activeScene.actions.length - 1" @click="moveAction(index, 1)"><ArrowDown :size="12" /></button>
-                </div>
-                <span>{{ String(index + 1).padStart(2, '0') }}</span><textarea v-model="activeScene.actions[index]" rows="2"></textarea>
-                <button @click="activeScene.actions.splice(index, 1)"><X :size="13" /></button>
+            <div class="editor-section-title">
+              <span>剧本内容 · 按演出顺序</span>
+              <div class="content-add-actions">
+                <button @click="addContent('action')"><Plus :size="13" /> 添加动作</button>
+                <button @click="addContent('dialogue')"><MessageSquareText :size="13" /> 添加对白</button>
               </div>
             </div>
-          </div>
-
-          <div class="editor-section">
-            <div class="editor-section-title"><span>人物对白</span><button @click="addDialogue"><Plus :size="13" /> 添加对白</button></div>
-            <div class="dialogue-list">
-              <div v-for="(dialogue, index) in activeScene.dialogues" :key="dialogue.id" class="dialogue-row">
+            <div class="content-list">
+              <div v-for="(item, index) in activeScene.content" :key="item.id" class="content-row" :class="item.type">
+                <GripVertical :size="15" />
                 <div class="row-move-actions">
-                  <button title="上移对白" :disabled="index === 0" @click="moveDialogue(index, -1)"><ArrowUp :size="12" /></button>
-                  <button title="下移对白" :disabled="index === activeScene.dialogues.length - 1" @click="moveDialogue(index, 1)"><ArrowDown :size="12" /></button>
+                  <button title="上移内容" :disabled="index === 0" @click="moveContent(index, -1)"><ArrowUp :size="12" /></button>
+                  <button title="下移内容" :disabled="index === activeScene.content.length - 1" @click="moveContent(index, 1)"><ArrowDown :size="12" /></button>
                 </div>
-                <div class="dialogue-fields">
-                  <div><input v-model="dialogue.character" class="speaker" /><input v-model="dialogue.emotion" class="emotion" /></div>
-                  <textarea v-model="dialogue.line" rows="2"></textarea>
+                <span class="content-index">{{ String(index + 1).padStart(2, '0') }}</span>
+                <div class="content-fields">
+                  <div class="content-kind">{{ item.type === 'dialogue' ? '对白与动作' : '动作' }}</div>
+                  <label class="content-action">
+                    <span>{{ item.type === 'dialogue' ? '对白对应动作' : '动作描述' }}</span>
+                    <textarea v-model="item.action" rows="2"></textarea>
+                  </label>
+                  <div v-if="item.type === 'dialogue'" class="dialogue-fields">
+                    <div>
+                      <select v-model="item.character" class="speaker">
+                        <option v-for="name in activeScene.characters" :key="name" :value="name">{{ name }}</option>
+                      </select>
+                      <input v-model="item.emotion" class="emotion" placeholder="情绪" />
+                    </div>
+                    <label><span>人物对白</span><textarea v-model="item.line" rows="2"></textarea></label>
+                  </div>
                 </div>
-                <button @click="activeScene.dialogues.splice(index, 1)"><X :size="13" /></button>
+                <button class="content-remove" title="删除内容" @click="activeScene.content.splice(index, 1)"><X :size="13" /></button>
               </div>
             </div>
           </div>
@@ -398,7 +420,7 @@ function moveScene(direction: number) {
           <div class="generate-mark small"><Sparkles :size="18" /></div>
           <span class="section-index">SCENE REWRITE</span>
           <h3>调整当前场景</h3>
-          <p>后端已配置模型时优先调用真实模型；未配置、调用失败或离线时使用可解释的本地规则。</p>
+          <p>描述你希望调整的效果，我们会保持剧情事实并优化当前场景。</p>
           <textarea v-model="polishInstruction" rows="4"></textarea>
           <div class="prompt-chips"><button @click="polishInstruction = '让冲突更强烈'">冲突更强烈</button><button @click="polishInstruction = '减少旁白，增加对白'">增加对白</button><button @click="polishInstruction = '保持剧情不变，改成夜晚'">改成夜晚</button></div>
           <button class="button primary full" :disabled="isPolishing || !polishInstruction.trim()" @click="applyPolish"><Sparkles :size="15" /> {{ isPolishing ? '润色中…' : '润色当前场景' }}</button>
@@ -411,7 +433,7 @@ function moveScene(direction: number) {
         <div class="confirm-modal">
           <div class="confirm-icon"><Trash2 :size="18" /></div>
           <h3>删除场景“{{ scenePendingDelete.title }}”？</h3>
-          <p>该场景中的动作、对白和编辑内容都会被删除，此操作无法撤销。</p>
+          <p>该场景中的剧本内容和编辑信息都会被删除，此操作无法撤销。</p>
           <div class="confirm-actions">
             <button class="button ghost" @click="scenePendingDelete = null">取消</button>
             <button class="button danger-fill" @click="confirmRemoveScene">确认删除</button>

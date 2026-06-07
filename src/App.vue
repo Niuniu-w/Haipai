@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { Check, Cloud, Feather, LayoutDashboard, Server, Sparkles } from 'lucide-vue-next'
-import { checkBackendHealth, getAIStatus, type AIStatus, type BackendStatus } from './api/health'
+import { Check, Cloud, Feather, LayoutDashboard, Sparkles } from 'lucide-vue-next'
+import { checkBackendHealth, type BackendStatus } from './api/health'
 import {
   createProject,
   deleteProject,
@@ -18,7 +18,7 @@ import GenerateView from './components/GenerateView.vue'
 import WorkspaceView from './components/WorkspaceView.vue'
 import { defaultProject, sampleNovel } from './data'
 import type { Project, ViewName } from './types'
-import { parseChapters } from './utils'
+import { normalizeProjectScenes, parseChapters } from './utils'
 
 const LOCAL_PROJECT_KEY = 'storyforge-project'
 const LOCAL_UPDATED_KEY = 'storyforge-project-local-updated-at'
@@ -32,6 +32,7 @@ if (stored) {
   }
 }
 const project = reactive<Project>(initialProject)
+normalizeProjectScenes(project)
 if (!project.chapters.length) project.chapters = parseChapters(project.rawText)
 if (!Number.isFinite(Date.parse(project.updatedAt))) {
   const storedUpdatedAt = localStorage.getItem(LOCAL_UPDATED_KEY)
@@ -49,7 +50,7 @@ project.generationError ??= ''
 project.generationAttempts ??= 0
 project.generationChapters ??= []
 project.revision ??= 0
-project.dialogueDensity ??= '均衡'
+project.dialogueDensity ??= '密集'
 project.targetSceneCount ??= Math.max(project.chapters.length, 1)
 const remoteProjectId = ref(localStorage.getItem('storyforge-project-id') ?? '')
 const storedRevision = localStorage.getItem('storyforge-project-revision') ?? ''
@@ -61,7 +62,6 @@ const saved = ref(true)
 const remoteSaved = ref(false)
 const toast = ref('')
 const backendStatus = ref<BackendStatus>('checking')
-const aiStatus = ref<AIStatus>({ configured: false, provider: 'openai-responses', model: '', fallback: 'local-rules' })
 let toastTimer: number | undefined
 let saveTimer: number | undefined
 let remoteSaveTimer: number | undefined
@@ -81,15 +81,9 @@ const steps: { id: ViewName; label: string }[] = [
 ]
 
 const currentStep = computed(() => steps.findIndex((step) => step.id === view.value))
-const backendLabel = computed(() => {
-  if (backendStatus.value === 'connected') return '后端已连接'
-  if (backendStatus.value === 'disconnected') return '后端未连接'
-  return '检查后端…'
-})
 const saveLabel = computed(() => {
   if (!saved.value) return '保存中…'
-  if (backendStatus.value === 'connected' && remoteSaved.value) return '已同步后端'
-  return '已保存本地'
+  return '已保存'
 })
 
 watch(
@@ -122,22 +116,12 @@ function notify(message: string) {
   toastTimer = window.setTimeout(() => (toast.value = ''), 2400)
 }
 
-async function refreshBackendStatus(showResult = false, syncProject = true) {
+async function refreshBackendStatus(syncProject = true) {
   backendStatus.value = 'checking'
   backendStatus.value = (await checkBackendHealth()) ? 'connected' : 'disconnected'
-  if (backendStatus.value === 'connected') await refreshAIStatus()
   if (backendStatus.value === 'connected' && syncProject && !remoteSaved.value) {
     await saveProjectToBackend()
     await refreshProjectHistory()
-  }
-  if (showResult) notify(backendLabel.value)
-}
-
-async function refreshAIStatus() {
-  try {
-    aiStatus.value = await getAIStatus()
-  } catch {
-    aiStatus.value = { configured: false, provider: 'openai-responses', model: '', fallback: 'local-rules' }
   }
 }
 
@@ -175,17 +159,17 @@ async function saveProjectToBackend(showResult = false) {
       localStorage.setItem('storyforge-project-revision', remoteRevision.value)
       remoteSaved.value = requestedVersion === changeVersion
       await refreshProjectHistory()
-      if (showResult) notify('项目已保存到后端')
+      if (showResult) notify('项目已保存')
       return true
     } catch (error) {
       remoteSaved.value = false
       if (error instanceof ApiRequestError && [409, 428].includes(error.status)) {
         if (lastConflictVersion !== changeVersion) {
           lastConflictVersion = changeVersion
-          notify('远端项目已有更新，已保留本地内容；请重新打开远端项目后再合并修改')
+          notify('项目已有其他更新，当前修改已保留；请重新打开项目后再合并修改')
         }
       } else if (showResult) {
-        notify('后端保存失败，项目仍保存在浏览器')
+        notify('保存失败，请稍后重试')
       }
       return false
     }
@@ -205,7 +189,7 @@ async function saveNow() {
   if (backendStatus.value === 'connected') {
     return saveProjectToBackend(true)
   } else {
-    notify('后端未连接，项目已保存到浏览器')
+    notify('项目已保存')
     return true
   }
 }
@@ -232,7 +216,7 @@ async function loadRemoteProject() {
     if (stored && Number.isFinite(localUpdatedAt) && localUpdatedAt > remoteUpdatedAt) {
       remoteRevision.value = String(response.data.revision)
       localStorage.setItem('storyforge-project-revision', remoteRevision.value)
-      if (await saveProjectToBackend()) notify('检测到较新的本地修改，已同步到后端')
+      if (await saveProjectToBackend()) notify('项目已保存')
     } else {
       await applyRemoteProject(response.data, response.updated_at)
     }
@@ -252,19 +236,19 @@ async function openRemoteProject(projectId: string) {
     view.value = project.scenes.length ? 'workspace' : 'import'
     notify(`已打开《${project.title}》`)
   } catch {
-    notify('项目加载失败，请检查后端连接')
+    notify('项目加载失败，请稍后重试')
   }
 }
 
 async function removeRemoteProject(projectId: string) {
   const item = projectHistory.value.find((projectItem) => projectItem.id === projectId)
-  if (!window.confirm(`确认删除后端项目《${item?.title ?? '未命名项目'}》？此操作无法撤销。`)) return
+  if (!window.confirm(`确认删除项目《${item?.title ?? '未命名项目'}》？此操作无法撤销。`)) return
   try {
     await backendSaveQueue
     await deleteProject(projectId)
     if (remoteProjectId.value === projectId) resetRemoteProject()
     await refreshProjectHistory()
-    notify('项目已从后端删除')
+    notify('项目已删除')
   } catch {
     notify('项目删除失败，请稍后重试')
   }
@@ -282,6 +266,7 @@ function resetRemoteProject() {
 async function applyRemoteProject(data: Project, updatedAt: string) {
   applyingProject = true
   Object.assign(project, data)
+  normalizeProjectScenes(project)
   project.updatedAt = updatedAt
   remoteRevision.value = String(data.revision)
   await nextTick()
@@ -317,7 +302,7 @@ async function newProject() {
     summary: '',
     adaptationMode: '忠于原著',
     scriptType: '电影',
-    dialogueDensity: '均衡',
+    dialogueDensity: '密集',
     targetSceneCount: 3,
     chapters: [],
     characters: [],
@@ -341,7 +326,7 @@ async function newProject() {
 
 onMounted(() => {
   document.title = '织幕 · AI 小说剧本工坊'
-  refreshBackendStatus(false, false).then(async () => {
+  refreshBackendStatus(false).then(async () => {
     await loadRemoteProject()
     await refreshProjectHistory()
   })
@@ -378,15 +363,6 @@ onBeforeUnmount(() => {
       </nav>
 
       <div class="top-actions">
-        <button
-          class="backend-state"
-          :class="backendStatus"
-          :title="backendStatus === 'disconnected' ? '点击重新检查后端连接' : backendLabel"
-          @click="refreshBackendStatus(true)"
-        >
-          <Server :size="13" />
-          {{ backendLabel }}
-        </button>
         <span v-if="view !== 'home'" class="save-state">
           <Cloud :size="14" />
           {{ saveLabel }}
@@ -422,8 +398,6 @@ onBeforeUnmount(() => {
         :project="project"
         :project-id="remoteProjectId"
         :backend-connected="backendStatus === 'connected'"
-        :ai-configured="aiStatus.configured"
-        :ai-model="aiStatus.model"
         @back="view = 'import'"
         @next="beginGeneration"
         @notify="notify"
@@ -433,8 +407,6 @@ onBeforeUnmount(() => {
         :project="project"
         :project-id="remoteProjectId"
         :backend-connected="backendStatus === 'connected'"
-        :ai-configured="aiStatus.configured"
-        :ai-model="aiStatus.model"
         @back="view = 'analysis'"
         @next="view = 'workspace'"
         @notify="notify"

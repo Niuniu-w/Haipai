@@ -22,11 +22,13 @@ export interface Relationship {
   relation: string
 }
 
-export interface Dialogue {
+export interface SceneContentItem {
   id: string
-  character: string
-  emotion: string
-  line: string
+  type: 'action' | 'dialogue'
+  action: string
+  character?: string
+  emotion?: string
+  line?: string
 }
 
 export interface Scene {
@@ -38,8 +40,7 @@ export interface Scene {
   time: string
   atmosphere: string
   characters: string[]
-  actions: string[]
-  dialogues: Dialogue[]
+  content: SceneContentItem[]
   sourceSummary: string
 }
 

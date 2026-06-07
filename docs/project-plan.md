@@ -64,8 +64,8 @@
   - 地点
   - 出场人物
   - 场景氛围
-  - 动作描述
-  - 人物对白
+  - 按演出顺序排列的剧本内容
+  - 每条人物对白及其对应动作
   - 来源剧情摘要
 - 展示整体生成进度。
 - 支持失败章节单独重试。
@@ -149,7 +149,7 @@
 | Pydantic | 数据结构校验 | 校验 AI 结构化输出和接口参数 |
 | SQLAlchemy | 数据访问层 | 操作 SQLite，并方便后续切换数据库 |
 | SQLite | 数据库 | 无需单独部署，适合比赛项目 |
-| HTTPX + Responses API | 调用大模型 | 支持可配置的 OpenAI Responses-compatible 模型接口 |
+| HTTPX + OpenAI 兼容接口 | 调用大模型 | 支持 DashScope Chat Completions JSON Mode 与 Responses API |
 | PyYAML | YAML 导出 | 将已校验的剧本对象转换为 YAML |
 | python-multipart | 文件上传 | 支持 `.txt`、`.md`、`.docx` 文件上传 |
 | Uvicorn | 本地服务器 | 运行 FastAPI |
@@ -338,8 +338,7 @@ location
 time
 atmosphere
 characters
-actions
-dialogues
+content
 source_summary
 ```
 
@@ -364,11 +363,12 @@ scenes:
     atmosphere: 安静、压抑
     characters:
       - 林墨
-    actions:
-      - 林墨走进即将打烊的咖啡馆。
-      - 他在桌下发现一封没有署名的信。
-    dialogues:
-      - character: 林墨
+    content:
+      - type: action
+        action: 林墨走进即将打烊的咖啡馆。
+      - type: dialogue
+        action: 林墨在桌下发现一封没有署名的信，抬头看向周岚。
+        character: 林墨
         emotion: 疑惑
         line: 这封信是谁留下的？
     source_summary: 林墨在咖啡馆发现匿名信。

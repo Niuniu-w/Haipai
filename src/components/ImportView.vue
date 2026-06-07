@@ -110,16 +110,16 @@ async function detect() {
       const result = await parseProjectChapters(props.projectId, props.project.rawText)
       replaceChapters(result.chapters)
       parseSource.value = 'backend'
-      emit('notify', `后端已识别 ${result.chapter_count} 个章节${result.valid ? '' : '，至少需要 3 章'}`)
+      emit('notify', `已识别 ${result.chapter_count} 个章节${result.valid ? '' : '，至少需要 3 章'}`)
     } else {
       replaceChapters(parseChapters(props.project.rawText))
       parseSource.value = 'local'
-      emit('notify', `本地已识别 ${props.project.chapters.length} 个章节`)
+      emit('notify', `已识别 ${props.project.chapters.length} 个章节`)
     }
   } catch {
     replaceChapters(parseChapters(props.project.rawText))
     parseSource.value = 'local'
-    emit('notify', `后端解析失败，已使用本地规则识别 ${props.project.chapters.length} 个章节`)
+    emit('notify', `已识别 ${props.project.chapters.length} 个章节`)
   } finally {
     selectedChapter.value = 0
     isParsing.value = false
@@ -277,7 +277,7 @@ async function handleFile(file?: File) {
         <div class="panel-title">
           <div><BookOpen :size="17" /><b>章节识别结果</b></div>
           <span class="valid-badge" :class="{ invalid: !valid }">
-            <CheckCircle2 :size="14" />{{ valid ? `结构有效${parseSource ? ` · ${parseSource === 'backend' ? '后端' : '本地'}` : ''}` : '至少需要 3 章' }}
+            <CheckCircle2 :size="14" />{{ valid ? '结构有效' : '至少需要 3 章' }}
           </span>
         </div>
         <div class="chapter-list">
@@ -318,7 +318,7 @@ async function handleFile(file?: File) {
     </div>
 
     <div class="flow-footer">
-      <span><CheckCircle2 :size="15" /> {{ backendConnected ? '原文与章节将同步至后端' : '后端未连接，原文暂存于浏览器' }}</span>
+      <span><CheckCircle2 :size="15" /> 内容会自动保存</span>
       <button class="button primary" :disabled="!valid" @click="$emit('next')">确认章节，开始分析 <ArrowRight :size="16" /></button>
     </div>
   </section>

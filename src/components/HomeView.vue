@@ -19,7 +19,7 @@ defineEmits<{ start: []; demo: []; continue: []; open: [projectId: string]; remo
         <button class="button primary large" @click="$emit('start')">开始改编 <ArrowRight :size="17" /></button>
         <button class="button ghost large" @click="$emit('demo')"><Play :size="16" fill="currentColor" /> 体验示例</button>
       </div>
-      <div class="hero-note"><span></span>无需 API Key，示例流程可完整体验</div>
+      <div class="hero-note"><span></span>内置示例可完整体验改编流程</div>
     </div>
 
     <div class="hero-visual">
@@ -61,14 +61,14 @@ defineEmits<{ start: []; demo: []; continue: []; open: [projectId: string]; remo
     </button>
 
     <section v-if="projects.length" class="project-history">
-      <div class="history-head"><span>后端项目</span><small>已保存 {{ projects.length }} 个项目</small></div>
+      <div class="history-head"><span>我的项目</span><small>共 {{ projects.length }} 个项目</small></div>
       <div class="history-list">
         <article v-for="item in projects" :key="item.id" class="history-item">
           <button class="history-open" @click="$emit('open', item.id)">
             <FolderOpen :size="17" />
             <span><b>《{{ item.title }}》</b><small>{{ item.chapter_count }} 章 · {{ item.scene_count }} 场 · {{ formatUpdatedAt(item.updated_at) }}</small></span>
           </button>
-          <button class="history-remove" title="删除后端项目" @click="$emit('remove', item.id)"><Trash2 :size="14" /></button>
+          <button class="history-remove" title="删除项目" @click="$emit('remove', item.id)"><Trash2 :size="14" /></button>
         </article>
       </div>
     </section>

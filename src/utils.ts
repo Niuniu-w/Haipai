@@ -1,7 +1,37 @@
 import yaml from 'js-yaml'
-import type { Chapter, Project, Scene } from './types'
+import type { Chapter, Project, Scene, SceneContentItem } from './types'
 
-export const SCRIPT_SCHEMA_VERSION = 'storyforge-script/v1'
+export const SCRIPT_SCHEMA_VERSION = 'storyforge-script/v2'
+
+type LegacyScene = Scene & {
+  actions?: string[]
+  dialogues?: { id: string; character: string; emotion: string; line: string }[]
+  content?: SceneContentItem[]
+}
+
+export function normalizeProjectScenes(project: Project): void {
+  project.scenes.forEach((scene) => {
+    const legacy = scene as LegacyScene
+    if (Array.isArray(legacy.content)) return
+    legacy.content = [
+      ...(legacy.actions ?? []).map((action, index) => ({
+        id: `${scene.id}-action-${index + 1}`,
+        type: 'action' as const,
+        action,
+      })),
+      ...(legacy.dialogues ?? []).map((dialogue, index) => ({
+        id: dialogue.id || `${scene.id}-dialogue-${index + 1}`,
+        type: 'dialogue' as const,
+        action: `${dialogue.character || '人物'}准备开口。`,
+        character: dialogue.character,
+        emotion: dialogue.emotion,
+        line: dialogue.line,
+      })),
+    ]
+    delete legacy.actions
+    delete legacy.dialogues
+  })
+}
 
 export function parseChapters(text: string): Chapter[] {
   const pattern = /^(第[零一二三四五六七八九十百\d]+章[^\n。！？]{0,80}|Chapter\s+\d+[^\n.!?]{0,80})$/gim
@@ -109,18 +139,23 @@ export function validateProjectScript(project: Project): string[] {
     })
     if (!chapterIds.has(scene.chapterId)) errors.push(`${label}：来源章节不存在`)
     else if (scene.sourceChapter !== chapterTitles.get(scene.chapterId)) errors.push(`${label}：来源章节标题与章节数据不一致`)
-    if (!scene.actions.length || scene.actions.some((action) => !action.trim())) errors.push(`${label}：动作描述不能为空`)
+    if (!scene.content.length) errors.push(`${label}：剧本内容不能为空`)
 
     const duplicateCharacters = [...new Set(scene.characters.filter((name, itemIndex) => name && scene.characters.indexOf(name) !== itemIndex))]
     if (duplicateCharacters.length) errors.push(`${label}：出场人物重复：${duplicateCharacters.join('、')}`)
     const unknownCharacters = [...new Set(scene.characters.filter((name) => !characterNames.has(name)))]
     if (unknownCharacters.length) errors.push(`${label}：出场人物不在人物表：${unknownCharacters.join('、')}`)
 
-    scene.dialogues.forEach((dialogue, dialogueIndex) => {
-      if (!dialogue.character.trim() || !dialogue.emotion.trim() || !dialogue.line.trim()) {
-        errors.push(`${label}：第 ${dialogueIndex + 1} 条对白字段不完整`)
-      } else if (!scene.characters.includes(dialogue.character)) {
-        errors.push(`${label}：对白人物“${dialogue.character}”不在本场出场人物中`)
+    scene.content.forEach((item, itemIndex) => {
+      if (!item.action.trim()) {
+        errors.push(`${label}：第 ${itemIndex + 1} 条内容的动作不能为空`)
+      }
+      if (item.type === 'dialogue') {
+        if (!item.character?.trim() || !item.emotion?.trim() || !item.line?.trim()) {
+          errors.push(`${label}：第 ${itemIndex + 1} 条对白字段不完整`)
+        } else if (!scene.characters.includes(item.character)) {
+          errors.push(`${label}：对白人物“${item.character}”不在本场出场人物中`)
+        }
       }
     })
   })
@@ -137,8 +172,15 @@ function sceneToOutput(scene: Scene) {
     time: scene.time,
     atmosphere: scene.atmosphere,
     characters: scene.characters,
-    actions: scene.actions,
-    dialogues: scene.dialogues.map(({ character, emotion, line }) => ({ character, emotion, line })),
+    content: scene.content.map((item) => item.type === 'dialogue'
+      ? {
+          type: item.type,
+          action: item.action,
+          character: item.character,
+          emotion: item.emotion,
+          line: item.line,
+        }
+      : { type: item.type, action: item.action }),
     source_summary: scene.sourceSummary,
   }
 }

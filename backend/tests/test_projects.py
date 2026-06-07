@@ -110,6 +110,44 @@ async def test_project_validation(client: AsyncClient, project_data: dict) -> No
 
 
 @pytest.mark.anyio
+async def test_legacy_scene_content_is_migrated_on_save(client: AsyncClient, project_data: dict) -> None:
+    chapter = {
+        "id": "chapter-1",
+        "title": "第一章",
+        "content": "林墨走进房间。",
+        "summary": "林墨进入房间",
+        "keyEvents": ["进入房间"],
+    }
+    legacy_scene = {
+        "id": "SC-01",
+        "chapterId": "chapter-1",
+        "sourceChapter": "第一章",
+        "title": "进入房间",
+        "location": "房间",
+        "time": "日",
+        "atmosphere": "平静",
+        "characters": ["林墨"],
+        "actions": ["林墨推开门。"],
+        "dialogues": [
+            {"id": "d-1", "character": "林墨", "emotion": "平静", "line": "有人吗？"}
+        ],
+        "sourceSummary": "林墨进入房间",
+    }
+
+    response = await client.post(
+        "/api/projects",
+        json={**project_data, "chapters": [chapter], "scenes": [legacy_scene]},
+    )
+
+    assert response.status_code == 201
+    saved_scene = response.json()["data"]["scenes"][0]
+    assert "actions" not in saved_scene
+    assert "dialogues" not in saved_scene
+    assert [item["type"] for item in saved_scene["content"]] == ["action", "dialogue"]
+    assert saved_scene["content"][1]["action"] == "林墨准备开口。"
+
+
+@pytest.mark.anyio
 async def test_parse_chapters_saves_result(client: AsyncClient, project_data: dict) -> None:
     project_id = (await client.post("/api/projects", json=project_data)).json()["id"]
     raw_text = """第一章 开始
@@ -362,8 +400,12 @@ async def test_generate_project_saves_scenes(client: AsyncClient, project_data: 
     assert response.json()["generation_mode"] == "local-rules"
     assert response.json()["scene_count"] == 3
     assert response.json()["scenes"][0]["chapterId"] == "chapter-1"
-    assert response.json()["scenes"][2]["dialogues"][0]["line"] == "真相不会消失。"
-    assert response.json()["scenes"][2]["dialogues"][0]["character"] == "林墨"
+    dialogue = next(
+        item for item in response.json()["scenes"][2]["content"] if item["type"] == "dialogue"
+    )
+    assert dialogue["line"] == "真相不会消失。"
+    assert dialogue["character"] == "林墨"
+    assert dialogue["action"]
 
     saved_project = (await client.get(f"/api/projects/{project_id}")).json()["data"]
     assert saved_project["generationStatus"] == "completed"
@@ -579,7 +621,7 @@ async def test_validate_and_export_yaml(client: AsyncClient, project_data: dict)
     assert export_response.status_code == 200
     assert export_response.headers["content-type"].startswith("application/yaml")
     exported = yaml.safe_load(export_response.text)
-    assert exported["schema_version"] == "storyforge-script/v1"
+    assert exported["schema_version"] == "storyforge-script/v2"
     assert exported["title"] == "测试故事"
     assert len(exported["chapters"]) == 3
     assert len(exported["scenes"]) == 3
@@ -598,13 +640,11 @@ async def test_invalid_script_cannot_export_yaml(client: AsyncClient, project_da
         "time": "",
         "atmosphere": "",
         "characters": ["不存在的人物"],
-        "actions": [],
-        "dialogues": [
+        "content": [
             {
-                "id": "dialogue-1",
-                "character": "对白人物",
-                "emotion": "",
-                "line": "",
+                "id": "content-1",
+                "type": "action",
+                "action": "",
             }
         ],
         "sourceSummary": "",
@@ -628,7 +668,7 @@ async def test_script_schema_is_versioned(client: AsyncClient) -> None:
     response = await client.get("/api/projects/script-schema")
 
     assert response.status_code == 200
-    assert response.json()["properties"]["schema_version"]["const"] == "storyforge-script/v1"
+    assert response.json()["properties"]["schema_version"]["const"] == "storyforge-script/v2"
 
 
 @pytest.mark.anyio
@@ -661,8 +701,7 @@ async def test_validation_rejects_duplicate_chapters_and_chapters_without_scenes
         "time": "日",
         "atmosphere": "平静",
         "characters": [],
-        "actions": ["动作"],
-        "dialogues": [],
+        "content": [{"id": "content-1", "type": "action", "action": "动作"}],
         "sourceSummary": "概要",
     }
     project_id = (

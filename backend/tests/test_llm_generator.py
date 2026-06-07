@@ -4,6 +4,7 @@ import backend.app.llm_generator as llm_generator
 from backend.app.llm_analyzer import LLMAnalysisError
 from backend.app.llm_generator import generate_script_with_fallback, generate_script_with_model
 from backend.app.schemas import Chapter, Character
+from backend.app.script_generator import build_local_scenes
 from backend.app.settings import LLMSettings
 
 
@@ -50,8 +51,16 @@ def test_model_script_generation_validates_and_converts_scenes() -> None:
                 "time": "夜",
                 "atmosphere": "紧张",
                 "characters": ["林墨"],
-                "actions": ["林墨推开咖啡馆的门。"],
-                "dialogues": [{"character": "林墨", "emotion": "疑惑", "line": "是谁留下的？"}],
+                "content": [
+                    {"type": "action", "action": "林墨推开咖啡馆的门。"},
+                    {
+                        "type": "dialogue",
+                        "action": "林墨停下脚步，警惕地环顾四周。",
+                        "character": "林墨",
+                        "emotion": "疑惑",
+                        "line": "是谁留下的？",
+                    },
+                ],
                 "sourceSummary": "林墨进入咖啡馆",
             }
         ]
@@ -92,10 +101,55 @@ def test_model_script_generation_validates_and_converts_scenes() -> None:
 
     assert scenes[0].id == "SC-01"
     assert scenes[0].sourceChapter == "第一章 雨夜"
-    assert scenes[0].dialogues[0].id == "dialogue-1-1"
+    assert scenes[0].content[1].id == "SC-01-content-2"
+    assert scenes[0].content[1].action == "林墨停下脚步，警惕地环顾四周。"
     assert client.request_json["text"]["format"]["type"] == "json_schema"
     assert "对白密度：密集" in client.request_json["input"]
     assert "目标场景数：2" in client.request_json["input"]
+    assert "避免旁白" in client.request_json["input"]
+
+
+def test_local_generation_defaults_to_dialogue_forward_scenes() -> None:
+    chapters = [
+        Chapter(
+            id="chapter-1",
+            title="第一章 线索",
+            content="林墨走进咖啡馆。他收到匿名信。他发现信中藏着地址。他决定立刻出发。",
+            summary="林墨收到匿名信",
+            keyEvents=["收到匿名信"],
+        )
+    ]
+    characters = [
+        Character(id="char-1", name="林墨", role="记者", description="调查者", color="#000000")
+    ]
+
+    scene = build_local_scenes(chapters, characters, "悬疑", "紧凑")[0]
+    dialogues = [item for item in scene.content if item.type == "dialogue"]
+    actions = [item for item in scene.content if item.type == "action"]
+
+    assert len(dialogues) > len(actions)
+    assert all(item.action and item.character and item.line for item in dialogues)
+
+
+def test_single_sentence_scene_with_character_becomes_dialogue() -> None:
+    chapters = [
+        Chapter(
+            id="chapter-1",
+            title="第一章 出发",
+            content="林墨决定立刻出发。",
+            summary="林墨决定出发",
+            keyEvents=["决定出发"],
+        )
+    ]
+    characters = [
+        Character(id="char-1", name="林墨", role="记者", description="调查者", color="#000000")
+    ]
+
+    scene = build_local_scenes(chapters, characters, "悬疑", "紧凑")[0]
+
+    assert len(scene.content) == 1
+    assert scene.content[0].type == "dialogue"
+    assert scene.content[0].action
 
 
 def test_model_script_failure_falls_back_to_local_rules(monkeypatch) -> None:
