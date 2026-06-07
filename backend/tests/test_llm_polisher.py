@@ -1,7 +1,7 @@
 import json
 
 from backend.app.llm_polisher import polish_scene_with_model
-from backend.app.schemas import Character, Dialogue, Scene
+from backend.app.schemas import Character, Scene, SceneContentItem
 from backend.app.settings import LLMSettings
 
 
@@ -36,8 +36,17 @@ def test_model_scene_polish_uses_structured_output_and_preserves_identity() -> N
         time="日",
         atmosphere="平静",
         characters=["林墨"],
-        actions=["林墨走进咖啡馆。"],
-        dialogues=[Dialogue(id="d-1", character="林墨", emotion="平静", line="你好。")],
+        content=[
+            SceneContentItem(id="c-1", type="action", action="林墨走进咖啡馆。"),
+            SceneContentItem(
+                id="c-2",
+                type="dialogue",
+                action="林墨向店员点头。",
+                character="林墨",
+                emotion="平静",
+                line="你好。",
+            ),
+        ],
         sourceSummary="林墨进入咖啡馆。",
     )
     output = {
@@ -46,8 +55,16 @@ def test_model_scene_polish_uses_structured_output_and_preserves_identity() -> N
         "time": "夜",
         "atmosphere": "紧张",
         "characters": ["林墨"],
-        "actions": ["林墨关上门。"],
-        "dialogues": [{"character": "林墨", "emotion": "警惕", "line": "谁在那里？"}],
+        "content": [
+            {"type": "action", "action": "林墨关上门。"},
+            {
+                "type": "dialogue",
+                "action": "林墨背靠门板，警惕地望向黑暗。",
+                "character": "林墨",
+                "emotion": "警惕",
+                "line": "谁在那里？",
+            },
+        ],
         "sourceSummary": "林墨进入咖啡馆。",
     }
     client = FakeClient(output)
@@ -70,5 +87,6 @@ def test_model_scene_polish_uses_structured_output_and_preserves_identity() -> N
     assert result.id == "SC-01"
     assert result.chapterId == "chapter-1"
     assert result.time == "夜"
-    assert result.dialogues[0].id == "SC-01-dialogue-1"
+    assert result.content[1].id == "SC-01-content-2"
+    assert result.content[1].action == "林墨背靠门板，警惕地望向黑暗。"
     assert client.request_json["text"]["format"]["type"] == "json_schema"

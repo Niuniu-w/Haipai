@@ -1,6 +1,7 @@
 import re
+from math import ceil
 
-from .schemas import Chapter, Character, Dialogue, Scene
+from .schemas import Chapter, Character, Scene, SceneContentItem
 
 sentence_pattern = re.compile(r"[^。！？\n]+[。！？](?:[”’」』])?|[^。！？\n]+$")
 quote_pattern = re.compile(r"“([^”]{1,120})”")
@@ -45,27 +46,74 @@ def infer_atmosphere(genre: str, style: str) -> str:
     return style or "写实、人物驱动"
 
 
-def extract_dialogues(
+def build_scene_content(
     content: str,
     character_names: list[str],
     scene_index: int,
-    limit: int = 4,
-) -> list[Dialogue]:
-    dialogues: list[Dialogue] = []
-    for quote_index, match in enumerate(quote_pattern.finditer(content)):
-        prefix = content[: match.start()]
-        speaker = max(character_names, key=prefix.rfind) if character_names else "角色"
-        if character_names and prefix.rfind(speaker) < 0:
-            speaker = character_names[quote_index % len(character_names)]
-        dialogues.append(
-            Dialogue(
-                id=f"dialogue-{scene_index + 1}-{quote_index + 1}",
-                character=speaker,
-                emotion="平静",
-                line=match.group(1),
-            )
+    dialogue_density: str = "密集",
+) -> list[SceneContentItem]:
+    items: list[SceneContentItem] = []
+    sentences = split_sentences(content)
+    dialogue_count = 0
+    dialogue_ratio = {"少量": 0.35, "均衡": 0.55, "密集": 0.7}.get(dialogue_density, 0.7)
+    dialogue_target = min(max(1, len(sentences) - 1), ceil(len(sentences) * dialogue_ratio)) if character_names else 0
+    for sentence_index, sentence in enumerate(sentences):
+        match = quote_pattern.search(sentence)
+        should_convert_narrative = (
+            bool(character_names)
+            and (sentence_index > 0 or len(sentences) == 1)
+            and dialogue_count < dialogue_target
         )
-    return dialogues[:limit]
+        if match or should_convert_narrative:
+            prefix = sentence[: match.start()].strip("，。！？：:“” ") if match else sentence
+            speaker = max(character_names, key=prefix.rfind) if character_names else "角色"
+            if character_names and prefix.rfind(speaker) < 0:
+                speaker = character_names[dialogue_count % len(character_names)]
+            if match:
+                action = prefix or f"{speaker}停下动作，准备开口。"
+                line = match.group(1)
+            else:
+                action_templates = (
+                    f"{speaker}看向同伴，主动说出自己的发现。",
+                    f"{speaker}压低声音，补充刚刚确认的细节。",
+                    f"{speaker}停下动作，明确说出接下来的决定。",
+                )
+                action = action_templates[dialogue_count % len(action_templates)]
+                line = sentence.strip("，。！？：:“” ")
+                if speaker in line[:16]:
+                    line = line.split(speaker, 1)[1].lstrip("，： ")
+                line = re.sub(r"^(他|她|他们|她们)", "我", line)
+                if line.startswith(("在", "从", "向", "把", "对")):
+                    line = f"我{line}"
+                line = line or "这件事不能再拖了。"
+                if line[-1] not in "。！？":
+                    line = f"{line}。"
+            items.append(
+                SceneContentItem(
+                    id=f"{scene_index + 1}-content-{len(items) + 1}",
+                    type="dialogue",
+                    action=action,
+                    character=speaker,
+                    emotion="认真",
+                    line=line[:120],
+                )
+            )
+            dialogue_count += 1
+        else:
+            items.append(
+                SceneContentItem(
+                    id=f"{scene_index + 1}-content-{len(items) + 1}",
+                    type="action",
+                    action=sentence,
+                )
+            )
+    return items or [
+        SceneContentItem(
+            id=f"{scene_index + 1}-content-1",
+            type="action",
+            action="根据原文章节补充动作描述。",
+        )
+    ]
 
 
 def distribute_scene_counts(chapter_count: int, target_scene_count: int | None) -> list[int]:
@@ -81,11 +129,10 @@ def build_local_scenes(
     characters: list[Character],
     genre: str,
     style: str,
-    dialogue_density: str = "均衡",
+    dialogue_density: str = "密集",
     target_scene_count: int | None = None,
 ) -> list[Scene]:
     scenes: list[Scene] = []
-    dialogue_limits = {"少量": 1, "均衡": 4, "密集": 8}
     for chapter_index, (chapter, chapter_scene_count) in enumerate(
         zip(chapters, distribute_scene_counts(len(chapters), target_scene_count), strict=True)
     ):
@@ -109,12 +156,11 @@ def build_local_scenes(
                     time=infer_time(chunk_text),
                     atmosphere=infer_atmosphere(genre, style),
                     characters=character_names,
-                    actions=chunk[:3] or ["根据原文章节补充动作描述。"],
-                    dialogues=extract_dialogues(
+                    content=build_scene_content(
                         chunk_text,
                         character_names,
                         scene_index,
-                        dialogue_limits.get(dialogue_density, 4),
+                        dialogue_density,
                     ),
                     sourceSummary=chapter.summary,
                 )

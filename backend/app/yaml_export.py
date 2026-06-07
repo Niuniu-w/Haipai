@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .schemas import ProjectData
 
-SCRIPT_SCHEMA_VERSION = "storyforge-script/v1"
+SCRIPT_SCHEMA_VERSION = "storyforge-script/v2"
 
 
 class ExportChapter(BaseModel):
@@ -24,7 +24,15 @@ class ExportCharacter(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class ExportAction(BaseModel):
+    type: Literal["action"]
+    action: str = Field(min_length=1)
+    model_config = ConfigDict(extra="forbid")
+
+
 class ExportDialogue(BaseModel):
+    type: Literal["dialogue"]
+    action: str = Field(min_length=1)
     character: str = Field(min_length=1)
     emotion: str = Field(min_length=1)
     line: str = Field(min_length=1)
@@ -40,14 +48,13 @@ class ExportScene(BaseModel):
     time: str = Field(min_length=1)
     atmosphere: str = Field(min_length=1)
     characters: list[str]
-    actions: list[str] = Field(min_length=1)
-    dialogues: list[ExportDialogue]
+    content: list[ExportAction | ExportDialogue] = Field(min_length=1)
     source_summary: str = Field(min_length=1)
     model_config = ConfigDict(extra="forbid")
 
 
 class ScriptExport(BaseModel):
-    schema_version: Literal["storyforge-script/v1"]
+    schema_version: Literal["storyforge-script/v2"]
     title: str = Field(min_length=1)
     genre: str = Field(min_length=1)
     adaptation_mode: str = Field(min_length=1)
@@ -92,14 +99,21 @@ def project_to_output(project: ProjectData) -> dict:
                 "time": scene.time,
                 "atmosphere": scene.atmosphere,
                 "characters": scene.characters,
-                "actions": scene.actions,
-                "dialogues": [
+                "content": [
                     {
-                        "character": dialogue.character,
-                        "emotion": dialogue.emotion,
-                        "line": dialogue.line,
+                        "type": item.type,
+                        "action": item.action,
+                        **(
+                            {
+                                "character": item.character,
+                                "emotion": item.emotion,
+                                "line": item.line,
+                            }
+                            if item.type == "dialogue"
+                            else {}
+                        ),
                     }
-                    for dialogue in scene.dialogues
+                    for item in scene.content
                 ],
                 "source_summary": scene.sourceSummary,
             }
@@ -180,8 +194,8 @@ def validate_project_script(project: ProjectData) -> list[str]:
             errors.append(f"{label}：来源章节不存在")
         elif scene.sourceChapter != chapter_titles[scene.chapterId]:
             errors.append(f"{label}：来源章节标题与章节数据不一致")
-        if not scene.actions or any(not action.strip() for action in scene.actions):
-            errors.append(f"{label}：动作描述不能为空")
+        if not scene.content:
+            errors.append(f"{label}：剧本内容不能为空")
 
         duplicate_scene_characters = {
             name for name, count in Counter(scene.characters).items() if name and count > 1
@@ -192,11 +206,14 @@ def validate_project_script(project: ProjectData) -> list[str]:
         if unknown_characters:
             errors.append(f"{label}：出场人物不在人物表：{'、'.join(sorted(unknown_characters))}")
 
-        for dialogue_index, dialogue in enumerate(scene.dialogues, start=1):
-            if not dialogue.character.strip() or not dialogue.emotion.strip() or not dialogue.line.strip():
-                errors.append(f"{label}：第 {dialogue_index} 条对白字段不完整")
-            elif dialogue.character not in scene.characters:
-                errors.append(f"{label}：对白人物“{dialogue.character}”不在本场出场人物中")
+        for item_index, item in enumerate(scene.content, start=1):
+            if not item.action.strip():
+                errors.append(f"{label}：第 {item_index} 条内容的动作不能为空")
+            if item.type == "dialogue":
+                if not item.character.strip() or not item.emotion.strip() or not item.line.strip():
+                    errors.append(f"{label}：第 {item_index} 条对白字段不完整")
+                elif item.character not in scene.characters:
+                    errors.append(f"{label}：对白人物“{item.character}”不在本场出场人物中")
     return errors
 
 

@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class Chapter(BaseModel):
@@ -28,11 +28,13 @@ class Relationship(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
 
-class Dialogue(BaseModel):
+class SceneContentItem(BaseModel):
     id: str
-    character: str
-    emotion: str
-    line: str
+    type: Literal["action", "dialogue"]
+    action: str
+    character: str = ""
+    emotion: str = ""
+    line: str = ""
 
 
 class Scene(BaseModel):
@@ -44,9 +46,36 @@ class Scene(BaseModel):
     time: str
     atmosphere: str
     characters: list[str]
-    actions: list[str]
-    dialogues: list[Dialogue]
+    content: list[SceneContentItem]
     sourceSummary: str
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_legacy_content(cls, value):
+        if not isinstance(value, dict) or "content" in value:
+            return value
+        migrated = dict(value)
+        actions = migrated.pop("actions", [])
+        dialogues = migrated.pop("dialogues", [])
+        migrated["content"] = [
+            {
+                "id": f"{migrated.get('id', 'scene')}-action-{index + 1}",
+                "type": "action",
+                "action": action,
+            }
+            for index, action in enumerate(actions)
+        ] + [
+            {
+                "id": dialogue.get("id", f"{migrated.get('id', 'scene')}-dialogue-{index + 1}"),
+                "type": "dialogue",
+                "action": f"{dialogue.get('character', '人物')}准备开口。",
+                "character": dialogue.get("character", ""),
+                "emotion": dialogue.get("emotion", ""),
+                "line": dialogue.get("line", ""),
+            }
+            for index, dialogue in enumerate(dialogues)
+        ]
+        return migrated
 
 
 class GenerationChapterState(BaseModel):
@@ -68,7 +97,7 @@ class ProjectData(BaseModel):
     summary: str
     adaptationMode: str
     scriptType: str
-    dialogueDensity: Literal["少量", "均衡", "密集"] = "均衡"
+    dialogueDensity: Literal["少量", "均衡", "密集"] = "密集"
     targetSceneCount: int = Field(default=0, ge=0, le=500)
     chapters: list[Chapter]
     characters: list[Character]

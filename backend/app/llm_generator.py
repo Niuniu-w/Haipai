@@ -1,17 +1,26 @@
+from typing import Literal
+
 import httpx
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from .llm_client import LLMAnalysisError, request_structured_output
-from .schemas import Chapter, Character, Dialogue, Scene
+from .schemas import Chapter, Character, Scene, SceneContentItem
 from .script_generator import build_local_scenes
 from .settings import LLMSettings, get_llm_settings
 
 
+class LLMAction(BaseModel):
+    type: Literal["action"]
+    action: str = Field(min_length=1, max_length=500)
+    model_config = ConfigDict(extra="forbid")
+
+
 class LLMDialogue(BaseModel):
+    type: Literal["dialogue"]
+    action: str = Field(min_length=1, max_length=500)
     character: str = Field(min_length=1, max_length=30)
     emotion: str = Field(min_length=1, max_length=30)
     line: str = Field(min_length=1, max_length=300)
-
     model_config = ConfigDict(extra="forbid")
 
 
@@ -22,11 +31,18 @@ class LLMScene(BaseModel):
     time: str = Field(min_length=1, max_length=50)
     atmosphere: str = Field(min_length=1, max_length=100)
     characters: list[str] = Field(max_length=12)
-    actions: list[str] = Field(min_length=1, max_length=8)
-    dialogues: list[LLMDialogue] = Field(max_length=12)
+    content: list[LLMAction | LLMDialogue] = Field(min_length=1, max_length=20)
     sourceSummary: str = Field(min_length=1, max_length=300)
 
     model_config = ConfigDict(extra="forbid")
+
+    @model_validator(mode="after")
+    def validate_dialogue_forward_scene(self):
+        if self.characters:
+            dialogue_count = sum(item.type == "dialogue" for item in self.content)
+            if dialogue_count < len(self.content) / 2:
+                raise ValueError("场景应主要通过人物对白推进")
+        return self
 
 
 class LLMScript(BaseModel):
@@ -45,7 +61,7 @@ def build_generation_input(
     chapters: list[Chapter],
     characters: list[Character],
     max_chars: int,
-    dialogue_density: str = "均衡",
+    dialogue_density: str = "密集",
     target_scene_count: int | None = None,
 ) -> str:
     character_text = "、".join(f"{item.name}（{item.role}）" for item in characters) or "暂无人物表"
@@ -54,7 +70,10 @@ def build_generation_input(
         f"改编模式：{adaptation_mode}\n目标剧本类型：{script_type}\n人物表：{character_text}\n"
         f"对白密度：{dialogue_density}\n目标场景数：{target_scene_count or len(chapters)}\n"
         "请将以下章节改编为结构化剧本场景，尽量严格满足目标场景数，每章至少生成一个场景，"
-        "chapterId 必须原样返回："
+        "chapterId 必须原样返回。场景 content 必须按实际演出顺序混排动作与对白；"
+        "默认用人物对白推进剧情，将可以由角色说出的信息改写为对白，避免旁白、心理描写和小说式叙述；"
+        "纯动作只保留建立场景、人物行为和必要转场。有出场人物时，对白条目不得少于内容条目的一半。"
+        "每条对白都必须包含说话时对应的 action、character、emotion 和 line："
     )
     sections = [header]
     remaining = max_chars - len(header)
@@ -85,13 +104,12 @@ def convert_model_script(script: LLMScript, chapters: list[Chapter]) -> list[Sce
                 time=scene.time,
                 atmosphere=scene.atmosphere,
                 characters=scene.characters,
-                actions=scene.actions,
-                dialogues=[
-                    Dialogue(
-                        id=f"dialogue-{index + 1}-{dialogue_index + 1}",
-                        **dialogue.model_dump(mode="json"),
+                content=[
+                    SceneContentItem(
+                        id=f"SC-{index + 1:02d}-content-{item_index + 1}",
+                        **item.model_dump(mode="json"),
                     )
-                    for dialogue_index, dialogue in enumerate(scene.dialogues)
+                    for item_index, item in enumerate(scene.content)
                 ],
                 sourceSummary=scene.sourceSummary,
             )
@@ -110,7 +128,7 @@ def generate_script_with_model(
     script_type: str,
     chapters: list[Chapter],
     characters: list[Character],
-    dialogue_density: str = "均衡",
+    dialogue_density: str = "密集",
     target_scene_count: int | None = None,
     settings: LLMSettings | None = None,
     client: httpx.Client | None = None,
@@ -125,6 +143,7 @@ def generate_script_with_model(
             (
                 "你是专业的中文影视编剧。请忠于输入原文，将每章改编成可拍摄的结构化场景。"
                 "不要虚构改变主线的新事件，动作应可视化，对白应符合人物身份。"
+                "优先通过人物之间的对白呈现信息、冲突与选择，减少旁白和解释性动作。"
             ),
             build_generation_input(
                 title,
@@ -158,7 +177,7 @@ def generate_script_with_fallback(
     script_type: str,
     chapters: list[Chapter],
     characters: list[Character],
-    dialogue_density: str = "均衡",
+    dialogue_density: str = "密集",
     target_scene_count: int | None = None,
 ) -> tuple[list[Scene], str, str]:
     settings = get_llm_settings()

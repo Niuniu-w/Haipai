@@ -15,7 +15,6 @@ from .schemas import (
     ChapterParseRequest,
     ChapterParseResponse,
     Character,
-    Dialogue,
     GenerationChapterState,
     GenerationStatusResponse,
     ProjectData,
@@ -173,15 +172,10 @@ def reindex_scenes(scenes: list[Scene], chapters: list[Chapter]) -> list[Scene]:
     return [
         scene.model_copy(
             update={
-                "id": f"SC-{scene_index + 1:02d}",
-                "dialogues": [
-                    Dialogue(
-                        id=f"dialogue-{scene_index + 1}-{dialogue_index + 1}",
-                        character=dialogue.character,
-                        emotion=dialogue.emotion,
-                        line=dialogue.line,
-                    )
-                    for dialogue_index, dialogue in enumerate(scene.dialogues)
+                "id": (scene_id := f"SC-{scene_index + 1:02d}"),
+                "content": [
+                    item.model_copy(update={"id": f"{scene_id}-content-{item_index + 1}"})
+                    for item_index, item in enumerate(scene.content)
                 ],
             }
         )
@@ -311,7 +305,7 @@ def generate_chapter(project: ProjectRecord, chapter_id: str, db: Session) -> Sc
             script_type=payload.get("scriptType", "电影"),
             chapters=[chapter],
             characters=characters,
-            dialogue_density=payload.get("dialogueDensity", "均衡"),
+            dialogue_density=payload.get("dialogueDensity", "密集"),
             target_scene_count=target_scenes_for_chapter(payload, chapters, chapter_id),
         )
         existing_scenes = [
